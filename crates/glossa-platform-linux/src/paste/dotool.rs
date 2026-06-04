@@ -21,9 +21,15 @@ impl DotoolPasteBackend {
     #[must_use]
     pub fn command_script(mode: PasteMode) -> &'static str {
         match mode {
-            PasteMode::CtrlV => "key ctrl+v\n",
-            PasteMode::CtrlShiftV => "key ctrl+shift+v\n",
-            PasteMode::ShiftInsert => "key shift+insert\n",
+            PasteMode::CtrlV => {
+                "keydelay 50\nkeydown leftctrl\nkeydown v\nkeyup v\nkeyup leftctrl\n"
+            }
+            PasteMode::CtrlShiftV => {
+                "keydelay 50\nkeydown leftctrl\nkeydown leftshift\nkeydown v\nkeyup v\nkeyup leftshift\nkeyup leftctrl\n"
+            }
+            PasteMode::ShiftInsert => {
+                "keydelay 50\nkeydown leftshift\nkeydown insert\nkeyup insert\nkeyup leftshift\n"
+            }
         }
     }
 }
@@ -62,9 +68,23 @@ mod tests {
 
     #[test]
     fn paste_mode_should_map_to_expected_dotool_script() {
-        assert_eq!(
-            DotoolPasteBackend::command_script(PasteMode::CtrlShiftV),
-            "key ctrl+shift+v\n"
-        );
+        let cases = [
+            (
+                PasteMode::CtrlV,
+                "keydelay 20\nkeydown leftctrl\nkeydown v\nkeyup v\nkeyup leftctrl\n",
+            ),
+            (
+                PasteMode::CtrlShiftV,
+                "keydelay 20\nkeydown leftctrl\nkeydown leftshift\nkeydown v\nkeyup v\nkeyup leftshift\nkeyup leftctrl\n",
+            ),
+            (
+                PasteMode::ShiftInsert,
+                "keydelay 20\nkeydown leftshift\nkeydown insert\nkeyup insert\nkeyup leftshift\n",
+            ),
+        ];
+
+        for (mode, script) in cases {
+            assert_eq!(DotoolPasteBackend::command_script(mode), script);
+        }
     }
 }
