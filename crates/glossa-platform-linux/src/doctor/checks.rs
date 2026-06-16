@@ -19,6 +19,7 @@ impl Doctor {
             check_session_bus(),
             check_portal(config),
             check_binary("wl-copy"),
+            check_binary("wl-paste"),
             check_binary("notify-send"),
             check_binary(config.paste.type_command.as_str()),
             check_tray(config),
@@ -203,6 +204,21 @@ mod tests {
                 .iter()
                 .any(|finding| finding.name == "dotoolc"),
             "doctor should check the configured paste command"
+        );
+    }
+
+    #[tokio::test]
+    async fn doctor_should_check_wl_paste_for_clipboard_restore() {
+        let report = Doctor::run(&AppConfig::default())
+            .await
+            .expect("doctor should produce a report");
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.name == "wl-paste"),
+            "doctor should check the clipboard read command"
         );
     }
 

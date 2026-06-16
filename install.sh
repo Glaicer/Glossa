@@ -262,13 +262,14 @@ assert_runtime_prerequisites() {
 }
 
 ensure_wl_copy() {
-  if command -v wl-copy >/dev/null 2>&1; then
+  if command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
     wl_copy_path="$(command -v wl-copy)"
   else
-    log "wl-copy was not found. Installing wl-clipboard via apt-get."
+    log "wl-clipboard was not found. Installing wl-clipboard via apt-get."
     sudo apt-get update
     sudo apt-get install -y wl-clipboard
     command -v wl-copy >/dev/null 2>&1 || die "wl-copy is still unavailable after installing wl-clipboard."
+    command -v wl-paste >/dev/null 2>&1 || die "wl-paste is still unavailable after installing wl-clipboard."
     wl_copy_path="$(command -v wl-copy)"
   fi
 

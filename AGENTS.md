@@ -448,5 +448,4 @@ ExecStart=%h/.cargo/bin/glossa --config %h/.config/glossa/config.toml daemon
 - GUI settings window
 - System-wide daemon
 - Multiple microphones with UI switching
-- Restore clipboard after pasting
 - FLAC recording format (schema exists, implementation pending)

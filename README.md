@@ -26,6 +26,7 @@ I personally recommend using [Groq](https://groq.com/) as it offers the followin
 - Manage the installed user service with `glossa service start`, `stop`, and `restart`.
 - Includes microphone keepalive controls for lower recording startup latency.
 - Pastes using standard clipboard shortcuts such as `Ctrl+V`, `Ctrl+Shift+V`, or `Shift+Insert`, which helps with non-English input without switching keyboard layouts.
+- Restores initial clipboard content after pasting transcribed text.
 
 ## Installation
 
@@ -58,7 +59,6 @@ Glossa is my attempt to make this whole workflow simpler and more reliable on Ub
 
 Planned features:
 
-- clipboard restore after paste
 - direct input support
 - FLAC recording
 
@@ -115,7 +115,7 @@ The script will:
 
 Glossa depends on:
 
-- `wl-copy`
+- `wl-copy` and `wl-paste` from `wl-clipboard`
 - `dotool`
 
 The installer checks for both and installs them automatically.

@@ -10,7 +10,7 @@ mod text_enhancer;
 mod tray;
 
 pub use self::audio_capture::{ActiveRecording, AudioCapture};
-pub use self::clipboard::ClipboardWriter;
+pub use self::clipboard::{ClipboardSnapshot, ClipboardWriter};
 pub use self::command_source::CommandSource;
 pub use self::cue_player::CuePlayer;
 pub use self::paste_backend::PasteBackend;

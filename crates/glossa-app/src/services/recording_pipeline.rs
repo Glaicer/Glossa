@@ -1,6 +1,6 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use tokio::{sync::mpsc, task};
+use tokio::{sync::mpsc, task, time::sleep};
 use tracing::{info, warn};
 
 use glossa_core::{AppConfig, CapturedAudio, SessionId};
@@ -9,6 +9,8 @@ use crate::{
     ports::{ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore, TextEnhancer},
     AppError,
 };
+
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(250);
 
 /// Messages emitted back to the actor from background tasks.
 #[derive(Debug)]
@@ -184,6 +186,17 @@ async fn paste_cycle(
     session_id: SessionId,
     text: &str,
 ) -> Result<CycleOutcome, AppError> {
+    let mut warnings = Vec::new();
+    let previous_clipboard = match deps.clipboard.snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            warnings.push(format!(
+                "failed to save previous clipboard for session {session_id}: {error}"
+            ));
+            None
+        }
+    };
+
     let clipboard_text = if deps.config.paste.append_space && !text.is_empty() {
         Cow::Owned(format!("{text} "))
     } else {
@@ -202,16 +215,42 @@ async fn paste_cycle(
         "attempting paste via configured backend"
     );
     match deps.paste.paste(deps.config.paste.mode).await {
-        Ok(()) => Ok(CycleOutcome::Completed),
-        Err(error) => Ok(CycleOutcome::CompletedWithWarning(format!(
-            "paste failed after clipboard write for session {session_id}: {error}"
-        ))),
+        Ok(()) => {
+            if let Some(snapshot) = previous_clipboard {
+                // The paste backend only confirms that key events were sent; the target app
+                // may consume the clipboard shortly after handling those events.
+                sleep(CLIPBOARD_RESTORE_DELAY).await;
+                if let Err(error) = deps.clipboard.restore(snapshot).await {
+                    warnings.push(format!(
+                        "failed to restore previous clipboard for session {session_id}: {error}"
+                    ));
+                }
+            }
+            Ok(warning_outcome(warnings))
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "paste failed after clipboard write for session {session_id}: {error}"
+            ));
+            Ok(warning_outcome(warnings))
+        }
+    }
+}
+
+fn warning_outcome(warnings: Vec<String>) -> CycleOutcome {
+    if warnings.is_empty() {
+        CycleOutcome::Completed
+    } else {
+        CycleOutcome::CompletedWithWarning(warnings.join("; "))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
 
     use async_trait::async_trait;
     use camino::Utf8PathBuf;
@@ -223,29 +262,55 @@ mod tests {
     };
     use crate::{
         ports::{
-            ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore, TextEnhancer,
+            ClipboardSnapshot, ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore,
+            TextEnhancer,
         },
         AppError,
     };
 
     struct RecordingClipboard {
         text: Mutex<Vec<String>>,
+        restores: Mutex<Vec<ClipboardSnapshot>>,
+        snapshot: Mutex<Result<Option<ClipboardSnapshot>, String>>,
+        restore_result: Mutex<Result<(), String>>,
     }
 
     impl RecordingClipboard {
         fn new() -> Self {
             Self {
                 text: Mutex::new(Vec::new()),
+                restores: Mutex::new(Vec::new()),
+                snapshot: Mutex::new(Ok(Some(ClipboardSnapshot::new(
+                    "text/plain;charset=utf-8".to_owned(),
+                    b"previous".to_vec(),
+                )))),
+                restore_result: Mutex::new(Ok(())),
             }
         }
 
         fn recorded(&self) -> Vec<String> {
             self.text.lock().expect("clipboard lock").clone()
         }
+
+        fn restored(&self) -> Vec<ClipboardSnapshot> {
+            self.restores.lock().expect("clipboard lock").clone()
+        }
+
+        fn fail_restore(&self, message: impl Into<String>) {
+            *self.restore_result.lock().expect("clipboard lock") = Err(message.into());
+        }
     }
 
     #[async_trait]
     impl ClipboardWriter for RecordingClipboard {
+        async fn snapshot(&self) -> Result<Option<ClipboardSnapshot>, AppError> {
+            self.snapshot
+                .lock()
+                .expect("clipboard lock")
+                .clone()
+                .map_err(AppError::message)
+        }
+
         async fn set_text(&self, text: &str) -> Result<(), AppError> {
             self.text
                 .lock()
@@ -253,21 +318,36 @@ mod tests {
                 .push(text.to_owned());
             Ok(())
         }
+
+        async fn restore(&self, snapshot: ClipboardSnapshot) -> Result<(), AppError> {
+            self.restores.lock().expect("clipboard lock").push(snapshot);
+            self.restore_result
+                .lock()
+                .expect("clipboard lock")
+                .clone()
+                .map_err(AppError::message)
+        }
     }
 
     struct RecordingPaste {
         modes: Mutex<Vec<PasteMode>>,
+        result: Mutex<Result<(), String>>,
     }
 
     impl RecordingPaste {
         fn new() -> Self {
             Self {
                 modes: Mutex::new(Vec::new()),
+                result: Mutex::new(Ok(())),
             }
         }
 
         fn recorded(&self) -> Vec<PasteMode> {
             self.modes.lock().expect("paste lock").clone()
+        }
+
+        fn fail(&self, message: impl Into<String>) {
+            *self.result.lock().expect("paste lock") = Err(message.into());
         }
     }
 
@@ -275,7 +355,11 @@ mod tests {
     impl PasteBackend for RecordingPaste {
         async fn paste(&self, mode: PasteMode) -> Result<(), AppError> {
             self.modes.lock().expect("paste lock").push(mode);
-            Ok(())
+            self.result
+                .lock()
+                .expect("paste lock")
+                .clone()
+                .map_err(AppError::message)
         }
     }
 
@@ -364,6 +448,13 @@ mod tests {
 
         assert!(matches!(outcome, CycleOutcome::Completed));
         assert_eq!(clipboard.recorded(), vec!["hello ".to_owned()]);
+        assert_eq!(
+            clipboard.restored(),
+            vec![ClipboardSnapshot::new(
+                "text/plain;charset=utf-8".to_owned(),
+                b"previous".to_vec(),
+            )]
+        );
         assert_eq!(paste.recorded(), vec![PasteMode::CtrlV]);
     }
 
@@ -378,7 +469,74 @@ mod tests {
 
         assert!(matches!(outcome, CycleOutcome::Completed));
         assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
+        assert_eq!(
+            clipboard.restored(),
+            vec![ClipboardSnapshot::new(
+                "text/plain;charset=utf-8".to_owned(),
+                b"previous".to_vec(),
+            )]
+        );
         assert_eq!(paste.recorded(), vec![PasteMode::CtrlV]);
+    }
+
+    #[tokio::test]
+    async fn paste_cycle_should_not_restore_clipboard_when_paste_fails() {
+        let (deps, clipboard, paste) = test_dependencies(false);
+        paste.fail("paste command failed");
+        let session_id = SessionId::new();
+
+        let outcome = paste_cycle(&deps, session_id, "hello")
+            .await
+            .expect("paste cycle should succeed with warning");
+
+        assert!(matches!(outcome, CycleOutcome::CompletedWithWarning(_)));
+        assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
+        assert!(clipboard.restored().is_empty());
+    }
+
+    #[tokio::test]
+    async fn paste_cycle_should_warn_when_clipboard_restore_fails() {
+        let (deps, clipboard, _paste) = test_dependencies(false);
+        clipboard.fail_restore("restore failed");
+        let session_id = SessionId::new();
+
+        let outcome = paste_cycle(&deps, session_id, "hello")
+            .await
+            .expect("paste cycle should succeed with warning");
+
+        assert!(matches!(outcome, CycleOutcome::CompletedWithWarning(_)));
+        assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
+        assert_eq!(
+            clipboard.restored(),
+            vec![ClipboardSnapshot::new(
+                "text/plain;charset=utf-8".to_owned(),
+                b"previous".to_vec(),
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_cycle_should_wait_briefly_before_restoring_clipboard_after_paste() {
+        let (deps, clipboard, _paste) = test_dependencies(false);
+        let session_id = SessionId::new();
+        let started = Instant::now();
+
+        let outcome = paste_cycle(&deps, session_id, "hello")
+            .await
+            .expect("paste cycle should succeed");
+
+        assert!(matches!(outcome, CycleOutcome::Completed));
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "clipboard restore should be delayed long enough for the target app to consume the paste"
+        );
+        assert_eq!(
+            clipboard.restored(),
+            vec![ClipboardSnapshot::new(
+                "text/plain;charset=utf-8".to_owned(),
+                b"previous".to_vec(),
+            )]
+        );
     }
 
     struct RecordingTextEnhancer {
