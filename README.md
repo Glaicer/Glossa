@@ -153,6 +153,8 @@ sudo install -Dm755 dotool/dotoold /usr/local/bin/dotoold
 sudo install -Dm644 dotool/80-dotool.rules /etc/udev/rules.d/80-dotool.rules
 sudo groupadd -f input
 sudo usermod -a -G input "$USER"
+printf 'uinput\n' | sudo tee /etc/modules-load.d/dotool.conf >/dev/null
+sudo modprobe uinput
 sudo udevadm control --reload
 sudo udevadm trigger
 ```

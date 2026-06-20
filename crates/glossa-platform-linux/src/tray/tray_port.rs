@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     rc::Rc,
     sync::{
@@ -49,8 +49,24 @@ use super::settings_dialog::edit_settings;
 
 const TRAY_THREAD_NAME: &str = "glossa-tray";
 const NOTIFY_SEND_COMMAND: &str = "notify-send";
+const APPINDICATOR_LIBRARY_NAMES: &[&str] = &[
+    "libayatana-appindicator3.so.1",
+    "libappindicator3.so.1",
+    "libayatana-appindicator3.so",
+    "libappindicator3.so",
+];
+const APPINDICATOR_LIBRARY_DIRS: &[&str] = &[
+    "/lib64",
+    "/usr/lib64",
+    "/lib",
+    "/usr/lib",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib/aarch64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+];
 
-/// Best-effort tray port that runs a GTK/AppIndicator tray on Ubuntu GNOME Wayland.
+/// Best-effort tray port that runs a GTK/AppIndicator tray on GNOME Wayland.
 pub struct BestEffortTrayPort {
     enabled: bool,
     ui: UiConfig,
@@ -105,7 +121,15 @@ impl BestEffortTrayPort {
         }
 
         if !is_supported_tray_environment() {
-            warn!("tray is only enabled on Ubuntu GNOME Wayland; skipping tray initialization");
+            warn!("tray is only enabled on GNOME Wayland; skipping tray initialization");
+            self.started.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        if !has_appindicator_runtime_library() {
+            warn!(
+                "tray requires ayatana-appindicator3 or appindicator3 runtime library; install libayatana-appindicator-gtk3 on Fedora or the equivalent package for your distro; skipping tray initialization"
+            );
             self.started.store(false, Ordering::SeqCst);
             return;
         }
@@ -941,45 +965,61 @@ impl Drop for BestEffortTrayPort {
 }
 
 fn is_supported_tray_environment() -> bool {
-    is_wayland_session() && is_gnome_session() && is_ubuntu()
+    is_supported_tray_environment_values(
+        env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        env::var_os("WAYLAND_DISPLAY")
+            .and_then(|value| value.into_string().ok())
+            .as_deref(),
+        env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        env::var("DESKTOP_SESSION").ok().as_deref(),
+    )
 }
 
-fn is_wayland_session() -> bool {
-    matches!(
-        env::var("XDG_SESSION_TYPE"),
-        Ok(session_type) if session_type.eq_ignore_ascii_case("wayland")
-    ) || env::var_os("WAYLAND_DISPLAY").is_some()
-}
+fn is_supported_tray_environment_values(
+    session_type: Option<&str>,
+    wayland_display: Option<&str>,
+    current_desktop: Option<&str>,
+    desktop_session: Option<&str>,
+) -> bool {
+    let is_wayland =
+        session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
+            || wayland_display.is_some();
 
-fn is_gnome_session() -> bool {
-    let desktop = env::var("XDG_CURRENT_DESKTOP")
-        .or_else(|_| env::var("DESKTOP_SESSION"))
-        .unwrap_or_default();
+    let desktop = current_desktop.or(desktop_session).unwrap_or_default();
     desktop.to_ascii_uppercase().contains("GNOME")
+        && is_wayland
 }
 
-fn is_ubuntu() -> bool {
-    let Ok(os_release) = fs::read_to_string("/etc/os-release") else {
-        return false;
-    };
+fn has_appindicator_runtime_library() -> bool {
+    let ldconfig_has_library = Command::new("ldconfig")
+        .arg("-p")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|output| has_appindicator_library_in_ldconfig_output(&output));
 
-    os_release.lines().any(|line| {
-        let value = line
-            .strip_prefix("ID=")
-            .or_else(|| line.strip_prefix("ID_LIKE="));
+    ldconfig_has_library || appindicator_library_exists_in_common_paths()
+}
 
-        value.is_some_and(|value| {
-            value
-                .trim_matches('"')
-                .split_ascii_whitespace()
-                .any(|token| token.eq_ignore_ascii_case("ubuntu"))
-        })
+fn has_appindicator_library_in_ldconfig_output(output: &str) -> bool {
+    APPINDICATOR_LIBRARY_NAMES
+        .iter()
+        .any(|name| output.lines().any(|line| line.contains(name)))
+}
+
+fn appindicator_library_exists_in_common_paths() -> bool {
+    APPINDICATOR_LIBRARY_DIRS.iter().any(|dir| {
+        APPINDICATOR_LIBRARY_NAMES
+            .iter()
+            .any(|name| Path::new(dir).join(name).exists())
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        has_appindicator_library_in_ldconfig_output, is_supported_tray_environment_values,
         mic_stream_label, normalize_captured_shortcut, notify_send_arguments,
         shortcut_override_value, tray_version_label, ShortcutBindingConfig,
     };
@@ -1035,5 +1075,22 @@ mod tests {
                 "status 429 Too Many Requests",
             ]
         );
+    }
+
+    #[test]
+    fn supported_tray_environment_should_allow_fedora_gnome_wayland() {
+        assert!(is_supported_tray_environment_values(
+            Some("wayland"),
+            None,
+            Some("GNOME"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn appindicator_library_check_should_accept_ayatana_runtime_library() {
+        assert!(has_appindicator_library_in_ldconfig_output(
+            "libayatana-appindicator3.so.1 (libc6,x86-64) => /lib64/libayatana-appindicator3.so.1"
+        ));
     }
 }

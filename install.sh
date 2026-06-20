@@ -24,6 +24,7 @@ readonly INSTALLED_DOTOOL_PATH="/usr/local/bin/dotool"
 readonly INSTALLED_DOTOOLC_PATH="/usr/local/bin/dotoolc"
 readonly INSTALLED_DOTOOLD_PATH="/usr/local/bin/dotoold"
 readonly INSTALLED_DOTOOL_RULES_PATH="/etc/udev/rules.d/80-dotool.rules"
+readonly INSTALLED_DOTOOL_MODULES_LOAD_PATH="/etc/modules-load.d/dotool.conf"
 
 tmpdir=""
 glossa_bundle_dir=""
@@ -34,6 +35,7 @@ dotoold_path=""
 dotoolc_path=""
 glossa_path="${INSTALLED_GLOSSA_PATH}"
 dotool_installed_this_run=0
+dotool_requires_new_login=0
 manual_provider_setup=0
 created_or_updated_config=0
 keep_existing_config=0
@@ -53,6 +55,49 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+detect_pkg_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt-get"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
+  else
+    die "No supported package manager found (tried apt-get, dnf, yum)."
+  fi
+}
+
+install_system_packages() {
+  local pkg_manager
+  pkg_manager="$(detect_pkg_manager)"
+
+  case "${pkg_manager}" in
+    apt-get)
+      sudo apt-get update
+      sudo apt-get install -y "$@"
+      ;;
+    dnf)
+      sudo dnf install -y "$@"
+      ;;
+    yum)
+      sudo yum install -y "$@"
+      ;;
+  esac
+}
+
+package_name_for_distro() {
+  local debian_name="$1"
+  local fedora_name="$2"
+  local pkg_manager
+  pkg_manager="$(detect_pkg_manager)"
+
+  if [[ "${pkg_manager}" == "dnf" || "${pkg_manager}" == "yum" ]]; then
+    printf '%s' "${fedora_name}"
+  else
+    printf '%s' "${debian_name}"
+  fi
+}
 
 log() {
   printf '%s\n' "$*"
@@ -152,7 +197,7 @@ confirm_continue() {
   log
   log "This script will:"
   log "- verify that you are running GNOME on Wayland"
-  log "- install runtime dependencies such as wl-clipboard, libxdo3, and dotool if missing"
+  log "- install runtime dependencies such as wl-clipboard, libnotify, AppIndicator, libxdo, and dotool if missing"
   log "- download the latest Glossa release bundle from GitHub"
   log "- create ~/.config/glossa/config.toml and systemd user services"
   log
@@ -265,9 +310,8 @@ ensure_wl_copy() {
   if command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
     wl_copy_path="$(command -v wl-copy)"
   else
-    log "wl-clipboard was not found. Installing wl-clipboard via apt-get."
-    sudo apt-get update
-    sudo apt-get install -y wl-clipboard
+    log "wl-clipboard was not found. Installing wl-clipboard."
+    install_system_packages wl-clipboard
     command -v wl-copy >/dev/null 2>&1 || die "wl-copy is still unavailable after installing wl-clipboard."
     command -v wl-paste >/dev/null 2>&1 || die "wl-paste is still unavailable after installing wl-clipboard."
     wl_copy_path="$(command -v wl-copy)"
@@ -281,10 +325,9 @@ ensure_notify_send() {
   if command -v notify-send >/dev/null 2>&1; then
     notify_send_path="$(command -v notify-send)"
   else
-    log "notify-send was not found. Installing libnotify-bin via apt-get."
-    sudo apt-get update
-    sudo apt-get install -y libnotify-bin
-    command -v notify-send >/dev/null 2>&1 || die "notify-send is still unavailable after installing libnotify-bin."
+    log "notify-send was not found. Installing libnotify."
+    install_system_packages "$(package_name_for_distro libnotify-bin libnotify)"
+    command -v notify-send >/dev/null 2>&1 || die "notify-send is still unavailable after installing libnotify."
     notify_send_path="$(command -v notify-send)"
   fi
 
@@ -292,16 +335,27 @@ ensure_notify_send() {
     || die "notify-send is installed at ${notify_send_path}, but 'notify-send --version' failed."
 }
 
-ensure_libxdo3() {
-  if dpkg-query -W -f='${Status}' libxdo3 2>/dev/null | grep -Fq "install ok installed"; then
+ensure_appindicator_runtime() {
+  if ldconfig -p 2>/dev/null | grep -Eq 'lib(ayatana-)?appindicator3\.so\.1'; then
     return 0
   fi
 
-  log "libxdo3 was not found. Installing it via apt-get."
-  sudo apt-get update
-  sudo apt-get install -y libxdo3
+  log "AppIndicator runtime library was not found. Installing it."
+  install_system_packages "$(package_name_for_distro libayatana-appindicator3-1 libayatana-appindicator-gtk3)"
 
-  dpkg-query -W -f='${Status}' libxdo3 2>/dev/null | grep -Fq "install ok installed" \
+  ldconfig -p 2>/dev/null | grep -Eq 'lib(ayatana-)?appindicator3\.so\.1' \
+    || die "AppIndicator runtime library is still unavailable after installing it."
+}
+
+ensure_libxdo3() {
+  if ldconfig -p 2>/dev/null | grep -q 'libxdo.so.3'; then
+    return 0
+  fi
+
+  log "libxdo3 was not found. Installing it."
+  install_system_packages "$(package_name_for_distro libxdo3 libxdo)"
+
+  ldconfig -p 2>/dev/null | grep -q 'libxdo.so.3' \
     || die "libxdo3 is still unavailable after installing it."
 }
 
@@ -316,38 +370,53 @@ install_dotool_bundle_from_glossa_bundle() {
   local dotool_source="${bundle_dir}/dotool/dotool"
   local dotoolc_source="${bundle_dir}/dotool/dotoolc"
   local dotoold_source="${bundle_dir}/dotool/dotoold"
-  local rules_source="${bundle_dir}/dotool/80-dotool.rules"
 
   [[ -f "${dotool_source}" ]] || die "The Glossa release bundle does not contain 'dotool/dotool'."
   [[ -f "${dotoolc_source}" ]] || die "The Glossa release bundle does not contain 'dotool/dotoolc'."
   [[ -f "${dotoold_source}" ]] || die "The Glossa release bundle does not contain 'dotool/dotoold'."
-  [[ -f "${rules_source}" ]] || die "The Glossa release bundle does not contain 'dotool/80-dotool.rules'."
 
-  log "Installing dotool binaries and udev rules."
+  log "Installing dotool binaries."
   sudo install -Dm755 "${dotool_source}" "${INSTALLED_DOTOOL_PATH}"
   sudo install -Dm755 "${dotoolc_source}" "${INSTALLED_DOTOOLC_PATH}"
   sudo install -Dm755 "${dotoold_source}" "${INSTALLED_DOTOOLD_PATH}"
-  sudo install -Dm644 "${rules_source}" "${INSTALLED_DOTOOL_RULES_PATH}"
-  sudo groupadd -f input
-  sudo usermod -a -G input "$(id -un)"
-  sudo udevadm control --reload
-  sudo udevadm trigger
-
   dotool_installed_this_run=1
 }
 
+install_dotool_uinput_access() {
+  local rules_source="$1"
+
+  [[ -f "${rules_source}" ]] || die "The Glossa release bundle does not contain 'dotool/80-dotool.rules'."
+
+  log "Configuring dotool uinput access."
+  sudo install -Dm644 "${rules_source}" "${INSTALLED_DOTOOL_RULES_PATH}"
+  sudo groupadd -f input
+  if ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qx input; then
+    dotool_requires_new_login=1
+  fi
+  sudo usermod -a -G input "$(id -un)"
+  printf 'uinput\n' | sudo tee "${INSTALLED_DOTOOL_MODULES_LOAD_PATH}" >/dev/null
+  sudo modprobe uinput || die "Failed to load the uinput kernel module required by dotool."
+  sudo udevadm control --reload
+  sudo udevadm trigger
+}
+
 ensure_dotool_bundle() {
+  local rules_source
+  [[ -n "${glossa_bundle_dir}" ]] || die "The Glossa release bundle was not extracted."
+  rules_source="${glossa_bundle_dir}/dotool/80-dotool.rules"
+
   if dotool_bundle_ready; then
     dotool_path="$(command -v dotool)"
     dotoold_path="$(command -v dotoold)"
     dotoolc_path="$(command -v dotoolc)"
   else
-    [[ -n "${glossa_bundle_dir}" ]] || die "The Glossa release bundle was not extracted."
     install_dotool_bundle_from_glossa_bundle "${glossa_bundle_dir}"
     dotool_path="${INSTALLED_DOTOOL_PATH}"
     dotoold_path="${INSTALLED_DOTOOLD_PATH}"
     dotoolc_path="${INSTALLED_DOTOOLC_PATH}"
   fi
+
+  install_dotool_uinput_access "${rules_source}"
 
   "${dotool_path}" --version >/dev/null 2>&1 \
     || die "dotool is installed at ${dotool_path}, but 'dotool --version' failed."
@@ -731,7 +800,7 @@ EOF
 enable_services() {
   systemctl --user daemon-reload
 
-  if (( dotool_installed_this_run == 1 )); then
+  if (( dotool_installed_this_run == 1 || dotool_requires_new_login == 1 )); then
     systemctl --user enable dotool.service >/dev/null
   else
     systemctl --user enable --now dotool.service >/dev/null
@@ -747,7 +816,7 @@ enable_services() {
     return 0
   fi
 
-  if (( dotool_installed_this_run == 1 )); then
+  if (( dotool_installed_this_run == 1 || dotool_requires_new_login == 1 )); then
     systemctl --user enable glossa.service >/dev/null
   else
     systemctl --user enable --now glossa.service >/dev/null
@@ -798,8 +867,8 @@ print_final_summary() {
     log "Create ${GLOSSA_ENV_PATH} with ${missing_service_env_name}=... or rerun the installer with ${missing_service_env_name} exported, then start Glossa with: systemctl --user start glossa.service"
   fi
 
-  if (( dotool_installed_this_run == 1 )); then
-    log "dotool was installed during this run. Log out and back in, or reboot, before expecting paste to work."
+  if (( dotool_installed_this_run == 1 || dotool_requires_new_login == 1 )); then
+    log "dotool permissions changed during this run. Log out and back in, or reboot, before expecting paste to work."
   fi
 }
 
@@ -814,6 +883,7 @@ main() {
   systemctl --user --version >/dev/null 2>&1 || die "systemctl --user is not available in this session."
   ensure_wl_copy
   ensure_notify_send
+  ensure_appindicator_runtime
   ensure_libxdo3
   download_and_install_glossa
   maybe_generate_config

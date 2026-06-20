@@ -46,7 +46,15 @@ download_asset() {
   local destination="$2"
 
   log "Downloading ${asset_name}"
-  wget -qO "${destination}" "$(release_download_url "${asset_name}")"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 --retry-delay 1 \
+      -o "${destination}" "$(release_download_url "${asset_name}")"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${destination}" "$(release_download_url "${asset_name}")"
+  else
+    die "Neither curl nor wget is available."
+  fi
 }
 
 verify_updater_asset() {
@@ -65,7 +73,14 @@ main() {
   require_command bash
   require_command mktemp
   require_command sha256sum
-  require_command wget
+
+  if command -v curl >/dev/null 2>&1; then
+    : 
+  elif command -v wget >/dev/null 2>&1; then
+    :
+  else
+    die "Neither curl nor wget is available."
+  fi
 
   tmpdir="$(mktemp -d)"
 

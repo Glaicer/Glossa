@@ -16,11 +16,39 @@ readonly INSTALLED_DOTOOL_PATH="/usr/local/bin/dotool"
 readonly INSTALLED_DOTOOLC_PATH="/usr/local/bin/dotoolc"
 readonly INSTALLED_DOTOOLD_PATH="/usr/local/bin/dotoold"
 readonly INSTALLED_DOTOOL_RULES_PATH="/etc/udev/rules.d/80-dotool.rules"
+readonly INSTALLED_DOTOOL_MODULES_LOAD_PATH="/etc/modules-load.d/dotool.conf"
 
 tty_fd=3
 remove_wl_clipboard=0
+remove_libnotify_libxdo=0
 remove_dotool=0
 config_result="absent"
+
+remove_system_packages() {
+  local pkg_manager
+  if command -v apt-get >/dev/null 2>&1; then
+    pkg_manager="apt-get"
+  elif command -v dnf >/dev/null 2>&1; then
+    pkg_manager="dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    pkg_manager="yum"
+  else
+    warn "No supported package manager found; skipping package removal."
+    return 1
+  fi
+
+  case "${pkg_manager}" in
+    apt-get)
+      sudo apt-get remove -y "$@"
+      ;;
+    dnf)
+      sudo dnf remove -y "$@"
+      ;;
+    yum)
+      sudo yum remove -y "$@"
+      ;;
+  esac
+}
 
 log() {
   printf '%s\n' "$*"
@@ -84,7 +112,7 @@ confirm_continue() {
   log "This script will:"
   log "- stop and remove the Glossa user services"
   log "- remove the Glossa binary, bundled assets, and generated config"
-  log "- optionally remove wl-clipboard and dotool"
+  log "- optionally remove wl-clipboard, libnotify, and dotool"
   log
 
   if ! confirm_yes_no "Continue with the uninstall? [Y/n] " "yes"; then
@@ -96,6 +124,10 @@ confirm_continue() {
 prompt_optional_packages() {
   if confirm_yes_no "Uninstall wl-clipboard? [y/N] " "no"; then
     remove_wl_clipboard=1
+  fi
+
+  if confirm_yes_no "Uninstall libnotify and libxdo? [y/N] " "no"; then
+    remove_libnotify_libxdo=1
   fi
 
   if confirm_yes_no "Uninstall dotool? [y/N] " "no"; then
@@ -198,8 +230,12 @@ remove_glossa_installation() {
 remove_dotool_installation() {
   disable_and_remove_service "dotool.service" "${DOTOOL_SERVICE_PATH}"
 
-  if dpkg -s wl-clipboard >/dev/null 2>&1 && (( remove_wl_clipboard == 1 )); then
-    sudo apt-get remove -y wl-clipboard
+  if command -v wl-copy >/dev/null 2>&1 && (( remove_wl_clipboard == 1 )); then
+    remove_system_packages wl-clipboard || true
+  fi
+
+  if (( remove_libnotify_libxdo == 1 )); then
+    remove_system_packages libnotify libxdo || true
   fi
 
   if (( remove_dotool == 1 )); then
@@ -213,6 +249,11 @@ remove_dotool_installation() {
       log "Removed ${INSTALLED_DOTOOL_RULES_PATH}"
       sudo udevadm control --reload
       sudo udevadm trigger
+    fi
+
+    if [[ -e "${INSTALLED_DOTOOL_MODULES_LOAD_PATH}" ]]; then
+      sudo rm -f "${INSTALLED_DOTOOL_MODULES_LOAD_PATH}"
+      log "Removed ${INSTALLED_DOTOOL_MODULES_LOAD_PATH}"
     fi
 
     if getent group input >/dev/null 2>&1; then
@@ -249,6 +290,10 @@ print_summary() {
 
   if (( remove_wl_clipboard == 1 )); then
     log "- Requested wl-clipboard removal"
+  fi
+
+  if (( remove_libnotify_libxdo == 1 )); then
+    log "- Requested libnotify and libxdo removal"
   fi
 
   if (( remove_dotool == 1 )); then
