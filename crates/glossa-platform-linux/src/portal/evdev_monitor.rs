@@ -127,7 +127,7 @@ async fn monitor_key_release(
             .map(|(i, s)| async move { (i, s.next_event().await) })
             .collect();
 
-        if let Some((_idx, result)) = futs.next().await {
+        if let Some((idx, result)) = futs.next().await {
             drop(futs); // release mutable borrows on streams
             match result {
                 Ok(event) => {
@@ -143,6 +143,7 @@ async fn monitor_key_release(
                 }
                 Err(error) => {
                     debug!(error = %error, "evdev read error; continuing with other devices");
+                    discard_failed_stream(&mut streams, idx);
                 }
             }
         } else {
@@ -175,7 +176,7 @@ async fn monitor_key_press(target_key: KeyCode, done: oneshot::Sender<()>) -> Re
             .map(|(i, s)| async move { (i, s.next_event().await) })
             .collect();
 
-        if let Some((_idx, result)) = futs.next().await {
+        if let Some((idx, result)) = futs.next().await {
             drop(futs);
             match result {
                 Ok(event) => {
@@ -190,12 +191,17 @@ async fn monitor_key_press(target_key: KeyCode, done: oneshot::Sender<()>) -> Re
                 }
                 Err(error) => {
                     debug!(error = %error, "evdev read error; continuing with other devices");
+                    discard_failed_stream(&mut streams, idx);
                 }
             }
         } else {
             return Err("all evdev event streams ended".into());
         }
     }
+}
+
+fn discard_failed_stream<T>(streams: &mut Vec<T>, failed_index: usize) {
+    let _ = streams.swap_remove(failed_index);
 }
 
 fn open_keyboard_devices() -> Result<Vec<Device>, String> {
@@ -409,5 +415,14 @@ mod tests {
     #[test]
     fn parse_empty_returns_none() {
         assert!(parse_accelerator_keys("").is_none());
+    }
+
+    #[test]
+    fn failed_stream_is_discarded_while_healthy_streams_remain() {
+        let mut streams = vec!["keyboard", "disconnected hotkey device"];
+
+        discard_failed_stream(&mut streams, 1);
+
+        assert_eq!(streams, vec!["keyboard"]);
     }
 }

@@ -5,6 +5,12 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-07-21
+
+### Fixed
+
+- Disconnecting a keyboard monitored for hotkeys could cause Glossa to consume a full CPU core while idle because the evdev monitor continuously retried reads from the disconnected device. Failed event streams are now discarded while monitoring continues on the remaining keyboards.
+
 ## [1.4.0] - 2026-06-20
 
 ### Added
