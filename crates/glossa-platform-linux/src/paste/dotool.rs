@@ -71,15 +71,15 @@ mod tests {
         let cases = [
             (
                 PasteMode::CtrlV,
-                "keydelay 20\nkeydown leftctrl\nkeydown v\nkeyup v\nkeyup leftctrl\n",
+                "keydelay 50\nkeydown leftctrl\nkeydown v\nkeyup v\nkeyup leftctrl\n",
             ),
             (
                 PasteMode::CtrlShiftV,
-                "keydelay 20\nkeydown leftctrl\nkeydown leftshift\nkeydown v\nkeyup v\nkeyup leftshift\nkeyup leftctrl\n",
+                "keydelay 50\nkeydown leftctrl\nkeydown leftshift\nkeydown v\nkeyup v\nkeyup leftshift\nkeyup leftctrl\n",
             ),
             (
                 PasteMode::ShiftInsert,
-                "keydelay 20\nkeydown leftshift\nkeydown insert\nkeyup insert\nkeyup leftshift\n",
+                "keydelay 50\nkeydown leftshift\nkeydown insert\nkeyup insert\nkeyup leftshift\n",
             ),
         ];
 
