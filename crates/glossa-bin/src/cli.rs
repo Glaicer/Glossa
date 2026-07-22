@@ -32,6 +32,12 @@ pub enum Command {
     },
     Doctor,
     Status,
+    #[command(hide = true)]
+    StoreSecret {
+        slot: String,
+    },
+    #[command(hide = true)]
+    MigrateSecrets,
     Update,
 }
 
@@ -86,6 +92,25 @@ mod tests {
             Cli::try_parse_from(["glossa", "update"]).expect("update subcommand should parse");
 
         assert!(matches!(cli.command, super::Command::Update));
+    }
+
+    #[test]
+    fn internal_secret_commands_should_parse() {
+        let store = Cli::try_parse_from(["glossa", "store-secret", "provider"])
+            .expect("store-secret should parse");
+        assert!(matches!(
+            store.command,
+            super::Command::StoreSecret { slot } if slot == "provider"
+        ));
+
+        let migrate = Cli::try_parse_from([
+            "glossa",
+            "--config",
+            "/tmp/glossa.toml",
+            "migrate-secrets",
+        ])
+        .expect("migrate-secrets should parse");
+        assert!(matches!(migrate.command, super::Command::MigrateSecrets));
     }
 
     #[test]

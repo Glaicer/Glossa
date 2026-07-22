@@ -5,6 +5,8 @@ use glossa_core::{
     AppConfig, InputBackend, InputMode, LatencyMode, PasteMode, ProviderKind, UiTheme,
 };
 
+use crate::secret::{self, LLM_SLOT, PROVIDER_SLOT};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SettingsValues {
     pub(super) input_backend: InputBackend,
@@ -219,8 +221,10 @@ fn take_trailing_blank_lines(updated: &mut String) -> String {
 
 pub(super) fn write_settings_to_config(
     path: &Path,
-    settings: &SettingsValues,
+    settings: &mut SettingsValues,
 ) -> Result<(), AppError> {
+    settings.provider_api_key = secret::secure_input(&settings.provider_api_key, PROVIDER_SLOT)?;
+    settings.llm_api_key = secret::secure_input(&settings.llm_api_key, LLM_SLOT)?;
     let source = fs::read_to_string(path)
         .map_err(|error| AppError::io("failed to read config.toml", error))?;
     let updated = apply_settings_to_config(&source, settings)?;

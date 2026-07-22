@@ -8,6 +8,7 @@ use glossa_platform_linux::{
     dialog::show_fatal_error_dialog,
     ipc::IpcServer,
     portal::{run_escape_cancel_monitor, PortalShortcutSource},
+    secret::migrate_plaintext_api_keys,
 };
 
 use crate::bootstrap::{build_actor, build_tray, init_tracing, load_config};
@@ -22,6 +23,7 @@ async fn run_inner(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()
     let config_path =
         config_path.ok_or_else(|| anyhow!("`glossa daemon` requires --config <path>"))?;
     let mut config = load_config(&config_path).await?;
+    migrate_plaintext_api_keys(&config_path, &mut config)?;
     init_tracing(&config)?;
     info!(path = %config_path.display(), "starting glossa daemon");
     let tray = build_tray(&config_path, &config);
@@ -82,6 +84,7 @@ async fn run_inner(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()
             ActorExit::Restart => {
                 info!(path = %config_path.display(), "restarting glossa daemon");
                 config = load_config(&config_path).await?;
+                migrate_plaintext_api_keys(&config_path, &mut config)?;
             }
         }
     }

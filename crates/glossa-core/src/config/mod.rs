@@ -131,6 +131,7 @@ pub enum SecretSource {
     Empty,
     Literal(String),
     Env(String),
+    SecretService(String),
 }
 
 impl SecretSource {
@@ -141,6 +142,7 @@ impl SecretSource {
             Self::Empty => "empty".into(),
             Self::Literal(_) => "literal".into(),
             Self::Env(name) => format!("env:{name}"),
+            Self::SecretService(slot) => format!("secret-service:{slot}"),
         }
     }
 
@@ -151,6 +153,9 @@ impl SecretSource {
             Self::Literal(value) => Ok(value.clone()),
             Self::Env(name) => env::var(name).map_err(|_| CoreError::MissingSecret {
                 secret_source: format!("env:{name}"),
+            }),
+            Self::SecretService(slot) => Err(CoreError::MissingSecret {
+                secret_source: format!("secret-service:{slot}"),
             }),
         }
     }
@@ -169,6 +174,15 @@ impl TryFrom<String> for SecretSource {
             return Ok(Self::Env(name.to_string()));
         }
 
+        if let Some(slot) = value.strip_prefix("secret-service:") {
+            if slot.is_empty() {
+                return Err(CoreError::InvalidConfig(
+                    "api_key Secret Service slot must not be empty".into(),
+                ));
+            }
+            return Ok(Self::SecretService(slot.to_string()));
+        }
+
         if value.is_empty() {
             return Ok(Self::Empty);
         }
@@ -183,6 +197,7 @@ impl From<SecretSource> for String {
             SecretSource::Empty => String::new(),
             SecretSource::Literal(inner) => inner,
             SecretSource::Env(inner) => format!("env:{inner}"),
+            SecretSource::SecretService(inner) => format!("secret-service:{inner}"),
         }
     }
 }
@@ -199,7 +214,7 @@ impl Default for AppConfig {
                 kind: ProviderKind::Groq,
                 base_url: Some("https://api.groq.com/openai/v1".into()),
                 model: "whisper-large-v3".into(),
-                api_key: SecretSource::Env("GROQ_API_KEY".into()),
+                api_key: SecretSource::SecretService("provider".into()),
             },
             audio: AudioConfig::default(),
             paste: PasteConfig {
@@ -289,6 +304,22 @@ mod tests {
         let source = SecretSource::try_from("env:GROQ_API_KEY".to_string())
             .expect("env-backed secret should parse");
         assert_eq!(source.describe(), "env:GROQ_API_KEY");
+    }
+
+    #[test]
+    fn secret_source_should_parse_secret_service_values() {
+        let source = SecretSource::try_from("secret-service:provider".to_string())
+            .expect("Secret Service-backed secret should parse");
+        assert_eq!(source, SecretSource::SecretService("provider".into()));
+        assert_eq!(source.describe(), "secret-service:provider");
+        assert_eq!(String::from(source), "secret-service:provider");
+    }
+
+    #[test]
+    fn secret_source_should_reject_empty_secret_service_slot() {
+        let error = SecretSource::try_from("secret-service:".to_string())
+            .expect_err("empty Secret Service slot should fail");
+        assert!(error.to_string().contains("slot"));
     }
 
     #[test]

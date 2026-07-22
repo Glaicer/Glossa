@@ -17,8 +17,8 @@ kind = "groq"
 base_url = "https://api.groq.com/openai/v1"
 # Selects the transcription model; options depend on provider, for example Groq: "whisper-large-v3", "whisper-large-v3-turbo"; OpenAI: "whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe".
 model = "whisper-large-v3-turbo"
-# Sets the API key source or literal secret; options: "env:VARIABLE_NAME" or an explicit API key string.
-api_key = "env:GROQ_API_KEY"
+# References the provider key stored in Secret Service. "env:VARIABLE_NAME" is also supported.
+api_key = "secret-service:provider"
 
 [LLM]
 # Enables LLM post-processing for transcribed text before pasting; options: true, false.
@@ -27,7 +27,7 @@ enabled = false
 base_url = ""
 # Sets the chat model alias used for text enhancement.
 model = ""
-# Sets the LLM API key source or literal secret; options: "env:VARIABLE_NAME", an explicit API key string, or "" for local providers.
+# References an LLM key stored in Secret Service. "env:VARIABLE_NAME" or "" for local providers are also supported.
 api_key = ""
 
 [audio]

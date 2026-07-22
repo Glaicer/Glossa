@@ -5,6 +5,8 @@ use camino::Utf8PathBuf;
 use glossa_app::AppError;
 use glossa_core::AppConfig;
 
+use crate::secret;
+
 use super::{DoctorFinding, DoctorLevel, DoctorReport};
 
 /// Environment diagnostics for the Glossa runtime.
@@ -132,7 +134,7 @@ fn check_config(config: &AppConfig) -> DoctorFinding {
 }
 
 fn check_api_key(config: &AppConfig) -> DoctorFinding {
-    match config.resolve_api_key() {
+    match secret::resolve(&config.provider.api_key) {
         Ok(_) => ok(
             "API key",
             format!("resolved from {}", config.provider.api_key.describe()),

@@ -500,7 +500,7 @@ impl TrayRuntime {
         let mut settings = self.settings.borrow().clone();
         settings.llm_enabled = enabled;
 
-        if let Err(error) = write_settings_to_config(&self.config_path, &settings) {
+        if let Err(error) = write_settings_to_config(&self.config_path, &mut settings) {
             warn!(
                 error = %error,
                 path = %self.config_path.display(),
@@ -538,12 +538,12 @@ impl TrayRuntime {
             }
         };
 
-        let Some(settings) = edited else {
+        let Some(mut settings) = edited else {
             info!("settings change cancelled from tray");
             return;
         };
 
-        if let Err(error) = write_settings_to_config(&self.config_path, &settings) {
+        if let Err(error) = write_settings_to_config(&self.config_path, &mut settings) {
             warn!(
                 error = %error,
                 path = %self.config_path.display(),

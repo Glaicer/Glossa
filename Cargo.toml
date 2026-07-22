@@ -12,12 +12,13 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "1.4.1"
+version = "1.5.0"
 
 [workspace.dependencies]
 anyhow = "=1.0.95"
 async-trait = "=0.1.83"
 gtk = "=0.18.1"
+keyring = { version = "=3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
 camino = { version = "=1.1.9", features = ["serde1"] }
 clap = { version = "=4.5.21", features = ["derive"] }
 cpal = "0.15.3"

@@ -17,6 +17,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Ctl { ctl } => cmd::ctl::run(cli.config, ctl).await,
         Command::Doctor => cmd::doctor::run(cli.config).await,
         Command::Status => cmd::status::run(cli.config).await,
+        Command::StoreSecret { slot } => cmd::store_secret::run(&slot),
+        Command::MigrateSecrets => cmd::migrate_secrets::run(cli.config).await,
         Command::Update => cmd::update::run().await,
     }
     .context("command failed")

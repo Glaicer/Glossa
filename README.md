@@ -83,6 +83,8 @@ Most settings are available from the tray `Settings` menu, so you usually do not
 
 If you want to configure Glossa manually, edit `~/.config/glossa/config.toml`. Use [config.toml](contrib/examples/config.toml) in this repository as the reference example.
 
+API keys entered through the installer or tray are stored in the desktop Secret Service, not in `config.toml`. The config contains only `secret-service:provider` or `secret-service:llm`. Legacy literal keys are migrated automatically when the daemon starts. `env:VARIABLE_NAME` remains supported for users who prefer environment-based secrets.
+
 The tray has an `AI enhancer` checkbox. When it is off, Glossa pastes the speech-to-text result directly. When it is on, Glossa sends the transcribed text to the OpenAI-compatible chat endpoint first, then pastes the corrected response. Configure `enabled`, `base_url`, `model`, and `api_key` in the tray Settings → `LLM enhancer` window or in the `[LLM]` section of `config.toml`.
 
 ## Updating
@@ -170,7 +172,7 @@ install -m644 assets/tray/* ~/.local/share/glossa/assets/tray/
 install -m644 assets/sounds/* ~/.local/share/glossa/assets/sounds/
 ```
 
-7. Create `~/.config/glossa/config.toml`. A good reference is `contrib/examples/config.toml` from this repository. Set `type_command = "/usr/local/bin/dotoolc"` so Glossa sends paste actions through the running `dotoold` service. If you use `api_key = "env:..."`, also provide the variable through `~/.config/glossa/glossa.env` or your user session environment.
+7. Store the provider key with `read -rsp "API key: " GLOSSA_KEY; printf '%s' "$GLOSSA_KEY" | ~/.local/bin/glossa store-secret provider; unset GLOSSA_KEY`, then create `~/.config/glossa/config.toml` with `api_key = "secret-service:provider"`. A good reference is `contrib/examples/config.toml`. Set `type_command = "/usr/local/bin/dotoolc"` so Glossa sends paste actions through the running `dotoold` service. `env:VARIABLE_NAME` remains supported as an alternative.
 8. Create the user services and enable them:
 
 ```bash

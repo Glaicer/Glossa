@@ -529,7 +529,7 @@ prompt_provider() {
         provider_kind="openai-compatible"
         provider_base_url="https://example.com/openai/v1"
         provider_model="example-model"
-        provider_api_key="SET_YOUR_API_KEY"
+        provider_api_key=""
         manual_provider_setup=1
         return 0
         ;;
@@ -595,6 +595,16 @@ prompt_api_key() {
   done
 }
 
+store_provider_api_key() {
+  if [[ "${provider_api_key}" == env:* ]]; then
+    return 0
+  fi
+
+  printf '%s' "${provider_api_key}" | "${glossa_path}" store-secret provider \
+    || die "Failed to store the provider API key in Secret Service."
+  provider_api_key="secret-service:provider"
+}
+
 prompt_theme() {
   while true; do
     prompt $'Is your system panel dark or light? This sets the tray icons.\n\n1) Dark (default)\n2) Light\n\nSelection [1]: '
@@ -626,6 +636,7 @@ configure_new_install() {
   if (( manual_provider_setup == 0 )); then
     prompt_model
     prompt_api_key
+    store_provider_api_key
   else
     log "Self-hosted providers need manual setup. The installer will write placeholder values to ${CONFIG_PATH}."
   fi
@@ -734,9 +745,9 @@ EOF
 The generated config contains placeholder provider values:
 - base_url = "https://example.com/openai/v1"
 - model = "example-model"
-- api_key = "SET_YOUR_API_KEY"
+- api_key = ""
 
-Edit ${CONFIG_PATH} before starting Glossa.
+Edit the endpoint and model before starting Glossa. Add an API key through the tray settings if the provider requires one.
 EOF
   fi
 }
@@ -887,6 +898,8 @@ main() {
   ensure_libxdo3
   download_and_install_glossa
   maybe_generate_config
+  "${glossa_path}" --config "${CONFIG_PATH}" migrate-secrets \
+    || die "Failed to migrate API keys to Secret Service."
   write_dotool_service
   write_glossa_service
   enable_services

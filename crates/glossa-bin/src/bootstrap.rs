@@ -9,7 +9,7 @@ use glossa_app::{ports::TrayPort, AppActor, AppDependencies};
 use glossa_audio::{CpalAudioCapture, CuePlayerBackend, WavSilenceTrimmer};
 use glossa_core::{AppConfig, LogLevel};
 use glossa_platform_linux::{
-    clipboard::WlCopyClipboard, paste::DotoolPasteBackend, temp::XdgTempStore,
+    clipboard::WlCopyClipboard, paste::DotoolPasteBackend, secret, temp::XdgTempStore,
     tray::BestEffortTrayPort,
 };
 use glossa_stt::{build_client, build_text_enhancer};
@@ -58,6 +58,12 @@ pub fn build_actor(
     config: AppConfig,
     tray: Arc<dyn TrayPort>,
 ) -> anyhow::Result<(AppActor, glossa_app::AppHandle)> {
+    let provider_api_key = secret::resolve(&config.provider.api_key)?;
+    let llm_api_key = if config.llm.enabled {
+        secret::resolve(&config.llm.api_key)?
+    } else {
+        String::new()
+    };
     let temp_store = Arc::new(XdgTempStore::from_audio_config(&config.audio)?);
     let deps = AppDependencies {
         audio_capture: Arc::new(CpalAudioCapture::new()),
@@ -67,8 +73,8 @@ pub fn build_actor(
             config.ui.start_sound.clone(),
             config.ui.stop_sound.clone(),
         )),
-        stt_client: build_client(&config)?,
-        text_enhancer: build_text_enhancer(&config)?,
+        stt_client: build_client(&config, provider_api_key),
+        text_enhancer: build_text_enhancer(&config, llm_api_key),
         clipboard: Arc::new(WlCopyClipboard::new(config.paste.clipboard_command.clone())),
         paste: Arc::new(DotoolPasteBackend::new(config.paste.type_command.clone())),
         tray,

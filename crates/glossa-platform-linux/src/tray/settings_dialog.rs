@@ -24,7 +24,7 @@ const PROVIDER_BASE_URL_TOOLTIP: &str =
 const PROVIDER_MODEL_TOOLTIP: &str =
     "Sets the transcription model that the configured provider should use.";
 const PROVIDER_API_KEY_TOOLTIP: &str =
-    "Sets the provider API key source or literal secret. Values such as env:VAR are supported.";
+    "API keys entered here are stored in Secret Service. Values such as env:VAR are also supported.";
 const PASTE_MODE_TOOLTIP: &str = "Selects which keyboard shortcut dotool should emulate for paste.";
 const APPEND_SPACE_TOOLTIP: &str =
     "Appends one trailing space to the pasted transcription for continuous dictation.";
@@ -39,7 +39,7 @@ const LLM_ENABLED_TOOLTIP: &str =
 const LLM_BASE_URL_TOOLTIP: &str = "Sets the OpenAI-compatible chat completions base URL.";
 const LLM_MODEL_TOOLTIP: &str = "Sets the chat model alias used for text enhancement.";
 const LLM_API_KEY_TOOLTIP: &str =
-    "Sets the LLM API key source or literal secret. Values such as env:VAR are supported.";
+    "API keys entered here are stored in Secret Service. Values such as env:VAR are also supported.";
 
 pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsValues>, AppError> {
     let dialog = Dialog::with_buttons(
