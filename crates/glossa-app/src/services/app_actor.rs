@@ -47,6 +47,7 @@ pub struct AppActor {
     deps: AppDependencies,
     state: AppState,
     active_recording: Option<Box<dyn ActiveRecording>>,
+    recording_deadline: Option<tokio::time::Instant>,
     command_rx: mpsc::UnboundedReceiver<AppCommand>,
     internal_tx: mpsc::UnboundedSender<InternalEvent>,
     internal_rx: mpsc::UnboundedReceiver<InternalEvent>,
@@ -75,6 +76,7 @@ impl AppActor {
             deps,
             state: AppState::Idle,
             active_recording: None,
+            recording_deadline: None,
             command_rx,
             internal_tx,
             internal_rx,
@@ -92,6 +94,7 @@ impl AppActor {
         self.publish_status();
 
         loop {
+            let recording_deadline = self.recording_deadline;
             tokio::select! {
                 maybe_command = self.command_rx.recv() => {
                     let Some(command) = maybe_command else {
@@ -107,6 +110,15 @@ impl AppActor {
                     };
                     self.handle_internal_event(event).await?;
                 }
+                _ = tokio::time::sleep_until(
+                    recording_deadline.unwrap_or_else(tokio::time::Instant::now)
+                ), if recording_deadline.is_some() => {
+                    if let Some(exit) = self.handle_command(AppCommand::StopRecording {
+                        origin: glossa_core::CommandOrigin::Internal,
+                    }).await? {
+                        return Ok(exit);
+                    }
+                }
             }
         }
 
@@ -117,6 +129,9 @@ impl AppActor {
         info!(state = ?self.state.kind(), command = ?command, "received command");
         let decision = reduce(&self.state, &command)?;
         self.state = decision.next_state;
+        if !matches!(self.state, AppState::Recording(_)) {
+            self.recording_deadline = None;
+        }
         self.publish_status();
 
         for action in decision.actions {
@@ -273,6 +288,10 @@ impl AppActor {
         {
             Ok(recording) => {
                 self.active_recording = Some(recording);
+                self.recording_deadline = Some(
+                    tokio::time::Instant::now()
+                        + Duration::from_secs(u64::from(self.config.audio.max_duration_sec)),
+                );
                 info!(
                     %session_id,
                     path = %path,
@@ -1055,12 +1074,84 @@ mod tests {
             .await
             .expect("stop should succeed");
 
+        assert!(actor.recording_deadline.is_none());
         assert_eq!(
             *lifecycle
                 .idle_timeout_calls
                 .lock()
                 .expect("mutex should not be poisoned"),
             vec![Duration::from_secs(60)]
+        );
+    }
+
+    #[tokio::test]
+    async fn recording_should_stop_at_configured_max_duration() {
+        let lifecycle = Arc::new(RecordingLifecycle::default());
+        let deps = AppDependencies {
+            audio_capture: Arc::new(TrackingAudioCapture {
+                lifecycle: Arc::clone(&lifecycle),
+            }),
+            trimmer: Arc::new(FakeTrimmer),
+            cue_player: Arc::new(FakeCuePlayer),
+            stt_client: Arc::new(FakeSttClient),
+            text_enhancer: Arc::new(NoopTextEnhancer),
+            clipboard: Arc::new(FakeClipboard),
+            paste: Arc::new(FakePaste),
+            tray: Arc::new(crate::ports::NullTrayPort),
+            temp_store: Arc::new(FakeTempStore),
+        };
+        let config = AppConfig {
+            audio: glossa_core::AudioConfig {
+                max_duration_sec: 1,
+                latency_mode: LatencyMode::Off,
+                ..glossa_core::AudioConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        let (actor, handle) = AppActor::new(config, deps);
+
+        let driver = async {
+            handle
+                .send(AppCommand::ToggleRecording {
+                    origin: CommandOrigin::CliControl,
+                })
+                .expect("start command should be sent");
+
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if !lifecycle
+                        .stop_calls
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .is_empty()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("recording should stop at its configured maximum duration");
+
+            handle
+                .send(AppCommand::Shutdown {
+                    origin: CommandOrigin::Internal,
+                })
+                .expect("shutdown command should be sent");
+        };
+
+        let (actor_result, ()) = tokio::join!(actor.run(), driver);
+        assert_eq!(
+            actor_result.expect("actor should shut down cleanly"),
+            ActorExit::Shutdown
+        );
+        assert_eq!(
+            lifecycle
+                .stop_calls
+                .lock()
+                .expect("mutex should not be poisoned")
+                .len(),
+            1
         );
     }
 
