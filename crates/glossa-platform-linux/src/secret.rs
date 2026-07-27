@@ -1,20 +1,85 @@
 //! API-key storage backed by the desktop Secret Service.
 
-use std::{fs, path::Path};
+use std::{fmt, fs, path::Path, time::Duration};
 
-use glossa_app::AppError;
+use async_trait::async_trait;
+use glossa_app::{ports::ApiKeyProvider, AppError};
 use glossa_core::{AppConfig, SecretSource};
 use keyring::Entry;
+use tokio::sync::OnceCell;
 
 const SERVICE: &str = "com.github.glaicer.glossa";
 pub const PROVIDER_SLOT: &str = "provider";
 pub const LLM_SLOT: &str = "llm";
+
+/// Upper bound on a single Secret Service round-trip.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolves an API-key source without exposing the value in diagnostics.
 pub fn resolve(source: &SecretSource) -> Result<String, AppError> {
     match source {
         SecretSource::SecretService(slot) => read(slot),
         _ => source.resolve().map_err(Into::into),
+    }
+}
+
+/// API-key provider that resolves on first use and caches the result.
+///
+/// The daemon starts at `graphical-session.target`, which can win the race
+/// against the desktop keyring. Resolving eagerly meant a locked keyring turned
+/// the startup path into an unbounded wait on an unlock prompt that nothing was
+/// there to answer, so the daemon hung before it ever bound its IPC socket or
+/// tray. Resolving lazily moves that call to a point where the session is fully
+/// up, and a failure is retried on the next attempt instead of being cached.
+pub struct LazyApiKey {
+    source: SecretSource,
+    cached: OnceCell<String>,
+}
+
+impl LazyApiKey {
+    #[must_use]
+    pub fn new(source: SecretSource) -> Self {
+        Self {
+            source,
+            cached: OnceCell::new(),
+        }
+    }
+}
+
+impl fmt::Debug for LazyApiKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LazyApiKey")
+            .field("source", &self.source.describe())
+            .field("resolved", &self.cached.initialized())
+            .finish()
+    }
+}
+
+#[async_trait]
+impl ApiKeyProvider for LazyApiKey {
+    async fn api_key(&self) -> Result<String, AppError> {
+        self.cached
+            .get_or_try_init(|| resolve_off_runtime(self.source.clone()))
+            .await
+            .cloned()
+    }
+}
+
+/// Runs the blocking Secret Service call off the runtime under a timeout.
+async fn resolve_off_runtime(source: SecretSource) -> Result<String, AppError> {
+    let described = source.describe();
+    let resolving = tokio::task::spawn_blocking(move || resolve(&source));
+
+    match tokio::time::timeout(RESOLVE_TIMEOUT, resolving).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(AppError::message(format!(
+            "failed to resolve {described}: {error}"
+        ))),
+        Err(_) => Err(AppError::message(format!(
+            "timed out after {}s resolving {described}; is the desktop keyring unlocked?",
+            RESOLVE_TIMEOUT.as_secs()
+        ))),
     }
 }
 
@@ -173,9 +238,62 @@ fn find_comment_start(value: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::env;
 
-    use super::{rewrite_api_key_sources, secure_input_with};
+    use super::{rewrite_api_key_sources, secure_input_with, LazyApiKey};
+    use glossa_app::ports::ApiKeyProvider;
     use glossa_core::SecretSource;
+
+    #[test]
+    fn lazy_key_should_not_touch_secret_service_before_first_use() {
+        let key = LazyApiKey::new(SecretSource::SecretService("provider".into()));
+
+        assert!(
+            !key.cached.initialized(),
+            "constructing the provider must not resolve; startup would block on a locked keyring"
+        );
+    }
+
+    #[tokio::test]
+    async fn lazy_key_should_resolve_and_cache_on_first_use() {
+        let key = LazyApiKey::new(SecretSource::Literal("literal-key".into()));
+
+        assert_eq!(key.api_key().await.expect("should resolve"), "literal-key");
+        assert!(key.cached.initialized());
+        assert_eq!(
+            key.api_key().await.expect("should hit cache"),
+            "literal-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn lazy_key_should_retry_after_a_failed_resolve() {
+        const VAR: &str = "GLOSSA_TEST_LAZY_RETRY_KEY";
+        env::remove_var(VAR);
+        let key = LazyApiKey::new(SecretSource::Env(VAR.into()));
+
+        assert!(
+            key.api_key().await.is_err(),
+            "a missing secret should surface as an error"
+        );
+
+        env::set_var(VAR, "arrived-later");
+        assert_eq!(
+            key.api_key().await.expect("should resolve on retry"),
+            "arrived-later",
+            "a failed resolve must not be cached, or the daemon would need a restart to recover"
+        );
+        env::remove_var(VAR);
+    }
+
+    #[test]
+    fn lazy_key_debug_should_describe_the_source_without_the_value() {
+        let key = LazyApiKey::new(SecretSource::Literal("top-secret".into()));
+        let rendered = format!("{key:?}");
+
+        assert!(rendered.contains("literal"));
+        assert!(!rendered.contains("top-secret"));
+    }
 
     #[test]
     fn rewrite_should_only_replace_selected_api_key_lines() {

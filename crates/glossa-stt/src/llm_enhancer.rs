@@ -1,8 +1,13 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use tracing::{debug, info};
 
-use glossa_app::{ports::TextEnhancer, AppError};
+use glossa_app::{
+    ports::{ApiKeyProvider, TextEnhancer},
+    AppError,
+};
 
 use crate::dto::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage};
 
@@ -11,14 +16,14 @@ use crate::dto::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage};
 pub struct HttpTextEnhancer {
     endpoint: String,
     model: String,
-    api_key: String,
+    api_key: Arc<dyn ApiKeyProvider>,
     client: reqwest::Client,
 }
 
 impl HttpTextEnhancer {
     /// Creates a new HTTP text enhancer.
     #[must_use]
-    pub fn new(base_url: String, model: String, api_key: String) -> Self {
+    pub fn new(base_url: String, model: String, api_key: Arc<dyn ApiKeyProvider>) -> Self {
         let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         Self {
             endpoint,
@@ -43,9 +48,10 @@ impl TextEnhancer for HttpTextEnhancer {
             messages: build_messages(text),
         };
 
+        let api_key = self.api_key.api_key().await?;
         let mut request = self.client.post(&self.endpoint).json(&request_body);
-        if !self.api_key.is_empty() {
-            request = request.bearer_auth(&self.api_key);
+        if !api_key.is_empty() {
+            request = request.bearer_auth(&api_key);
         }
 
         let response = request.send().await.map_err(|error| {
@@ -218,11 +224,15 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use glossa_app::ports::TextEnhancer;
+    use glossa_app::ports::{ApiKeyProvider, StaticApiKey, TextEnhancer};
 
     use super::{
-        build_messages, llm_status_error_message, ChatCompletionResponse, HttpTextEnhancer,
+        build_messages, llm_status_error_message, Arc, ChatCompletionResponse, HttpTextEnhancer,
     };
+
+    fn api_key(value: &str) -> Arc<dyn ApiKeyProvider> {
+        Arc::new(StaticApiKey::new(value.into()))
+    }
 
     struct CapturedRequest {
         method: String,
@@ -319,7 +329,7 @@ mod tests {
         let enhancer = HttpTextEnhancer::new(
             "http://localhost:11434/v1".into(),
             "llama3".into(),
-            String::new(),
+            api_key(""),
         );
         assert_eq!(enhancer.name(), "llm");
     }
@@ -431,7 +441,7 @@ mod tests {
         let response = r#"{"choices":[{"message":{"content":"  Hello, world!  "}}]}"#;
         let (base_url, handle) = run_test_server(200, "OK", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), "test-key".into());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key("test-key"));
         let result = enhancer.enhance("hello world").await;
 
         assert_eq!(result.expect("should succeed"), "Hello, world!");
@@ -454,7 +464,7 @@ mod tests {
         let response = r#"{"error":"invalid request"}"#;
         let (base_url, handle) = run_test_server(400, "Bad Request", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), "test-key".into());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key("test-key"));
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
@@ -470,7 +480,7 @@ mod tests {
         let response = r#"{"choices":[]}"#;
         let (base_url, handle) = run_test_server(200, "OK", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), "test-key".into());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key("test-key"));
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
@@ -485,7 +495,7 @@ mod tests {
         let response = r#"{"choices":[{"message":{"content":"   "}}]}"#;
         let (base_url, handle) = run_test_server(200, "OK", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), "test-key".into());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key("test-key"));
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
@@ -500,7 +510,7 @@ mod tests {
         let response = r#"{"choices":[{"message":{"content":"Hi"}}]}"#;
         let (base_url, handle) = run_test_server(200, "OK", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), String::new());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key(""));
         let result = enhancer.enhance("hi").await;
 
         assert_eq!(result.expect("should succeed"), "Hi");
@@ -518,7 +528,7 @@ mod tests {
         let response = r#"{"choices":[{"message":{"content":"Hi"}}]}"#;
         let (base_url, handle) = run_test_server(200, "OK", response).await;
 
-        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), "secret-key".into());
+        let enhancer = HttpTextEnhancer::new(base_url, "test-model".into(), api_key("secret-key"));
         let result = enhancer.enhance("hi").await;
 
         assert_eq!(result.expect("should succeed"), "Hi");

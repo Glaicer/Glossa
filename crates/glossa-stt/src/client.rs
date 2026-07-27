@@ -6,7 +6,10 @@ use reqwest::StatusCode;
 use tokio::fs;
 use tracing::debug;
 
-use glossa_app::{ports::SttClient, AppError};
+use glossa_app::{
+    ports::{ApiKeyProvider, SttClient},
+    AppError,
+};
 use glossa_core::{CapturedAudio, ProviderConfig, ProviderKind};
 
 use crate::dto::TranscriptionResponse;
@@ -17,7 +20,7 @@ pub struct HttpSttClient {
     provider_name: &'static str,
     endpoint: String,
     model: String,
-    api_key: String,
+    api_key: Arc<dyn ApiKeyProvider>,
     client: reqwest::Client,
 }
 
@@ -27,7 +30,7 @@ impl HttpSttClient {
         provider_name: &'static str,
         endpoint: String,
         model: String,
-        api_key: String,
+        api_key: Arc<dyn ApiKeyProvider>,
     ) -> Self {
         Self {
             provider_name,
@@ -71,9 +74,10 @@ impl SttClient for HttpSttClient {
             .text("model", self.model.clone())
             .part("file", file_part);
 
+        let api_key = self.api_key.api_key().await?;
         let mut request = self.client.post(&self.endpoint);
-        if !self.api_key.is_empty() {
-            request = request.bearer_auth(&self.api_key);
+        if !api_key.is_empty() {
+            request = request.bearer_auth(&api_key);
         }
 
         let response =
@@ -174,7 +178,7 @@ fn http_status_error_message(status: StatusCode) -> String {
 #[must_use]
 pub fn build_http_client(
     config: &ProviderConfig,
-    api_key: String,
+    api_key: Arc<dyn ApiKeyProvider>,
     provider_name: &'static str,
 ) -> Arc<dyn SttClient> {
     let base_url = config

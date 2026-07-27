@@ -1,3 +1,4 @@
+mod api_key;
 mod audio_capture;
 mod clipboard;
 mod command_source;
@@ -9,6 +10,7 @@ mod temp_store;
 mod text_enhancer;
 mod tray;
 
+pub use self::api_key::{ApiKeyProvider, StaticApiKey};
 pub use self::audio_capture::{ActiveRecording, AudioCapture};
 pub use self::clipboard::{ClipboardSnapshot, ClipboardWriter};
 pub use self::command_source::CommandSource;

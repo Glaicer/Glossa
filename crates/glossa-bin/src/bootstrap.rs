@@ -58,12 +58,10 @@ pub fn build_actor(
     config: AppConfig,
     tray: Arc<dyn TrayPort>,
 ) -> anyhow::Result<(AppActor, glossa_app::AppHandle)> {
-    let provider_api_key = secret::resolve(&config.provider.api_key)?;
-    let llm_api_key = if config.llm.enabled {
-        secret::resolve(&config.llm.api_key)?
-    } else {
-        String::new()
-    };
+    // Resolved lazily: touching Secret Service here blocks startup when the
+    // desktop keyring is not unlocked yet.
+    let provider_api_key = Arc::new(secret::LazyApiKey::new(config.provider.api_key.clone()));
+    let llm_api_key = Arc::new(secret::LazyApiKey::new(config.llm.api_key.clone()));
     let temp_store = Arc::new(XdgTempStore::from_audio_config(&config.audio)?);
     let deps = AppDependencies {
         audio_capture: Arc::new(CpalAudioCapture::new()),

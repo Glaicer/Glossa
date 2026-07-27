@@ -5,6 +5,17 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-07-27
+
+### Fixed
+
+- **Glossa could fail to come up with the session when the desktop keyring was not unlocked yet.** Since 1.5.0 the daemon resolved the provider and LLM API keys from Secret Service while building its dependencies — before it bound its IPC socket or created the tray icon. Because `glossa.service` starts at `graphical-session.target`, it can win the race against the keyring: if the keyring was still locked, the lookup opened an unlock prompt that nothing was in a position to answer and then waited on it with no timeout. The daemon hung mid-startup while systemd still reported the service as `active (running)`, so Glossa showed no tray icon, ignored the global shortcut, and did not answer `glossa status` — it looked as though it had never started with the session and had to be restarted by hand. API keys are now resolved on first use instead of at startup, so a locked or not-yet-started keyring can no longer block the daemon from coming up.
+- Secret Service lookups now run off the async runtime under a 10-second timeout and report a clear error instead of waiting indefinitely. A failed lookup is no longer cached, so the next recording retries it rather than requiring a daemon restart.
+
+### Changed
+
+- A missing or unreadable API key is now reported on the first recording rather than at daemon startup. `glossa doctor` still checks the provider key up front.
+
 ## [1.5.0] - 2026-07-22
 
 ### Added
@@ -150,6 +161,8 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.5.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.1
+[1.5.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.1
 [1.4.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.3.0
