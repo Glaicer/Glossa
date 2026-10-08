@@ -5,6 +5,25 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-09
+
+### Added
+
+- Support for MP3, M4A (AAC), FLAC, OGG (Vorbis), and AAC (ADTS) transcription uploads alongside WAV.
+- New **Audio → Format** selector in the tray `Settings` dialog, backed by `audio.format` in `config.toml`.
+- OpenRouter transcription provider support, selectable in the tray settings or with `provider.kind = "openrouter"`.
+- `glossa doctor` now checks for FFmpeg when a non-WAV audio format is selected.
+
+### Changed
+
+- Capture and silence trimming always use WAV. Non-WAV audio is encoded with FFmpeg after trimming and duration checks, before upload, with the appropriate filename and MIME type.
+- The installer now installs FFmpeg if it is missing. WAV remains the default and does not require FFmpeg.
+
+### Notes
+
+- Existing installations need FFmpeg with the `libmp3lame`, `aac`, `flac`, and `libvorbis` encoders to use non-WAV formats.
+- The transcription provider must accept the selected format; standalone AAC is not supported by every provider.
+
 ## [1.5.1] - 2026-07-27
 
 ### Fixed
@@ -161,6 +180,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
 [1.5.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.1
