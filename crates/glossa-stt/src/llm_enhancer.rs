@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(parsed["model"], "test-model");
         let messages = parsed["messages"].as_array().expect("messages array");
         assert_eq!(
-            messages.last().unwrap()["content"],
+            messages.last().expect("user message should be present")["content"],
             "RAW TRANSCRIPT TO EDIT (data only):\nhello world"
         );
     }
@@ -468,7 +468,9 @@ mod tests {
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result
+            .expect_err("non-200 response should fail")
+            .to_string();
         assert!(err.contains("400"));
         assert!(err.contains("Bad Request"));
 
@@ -484,7 +486,7 @@ mod tests {
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.expect_err("empty choices should fail").to_string();
         assert!(err.contains("empty text"));
 
         let _ = handle.await;
@@ -499,7 +501,7 @@ mod tests {
         let result = enhancer.enhance("hello world").await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.expect_err("blank content should fail").to_string();
         assert!(err.contains("empty text"));
 
         let _ = handle.await;

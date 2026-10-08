@@ -44,7 +44,6 @@ impl AppConfig {
 
     /// Validates cross-field invariants required by the MVP specification.
     pub fn validate(&self) -> Result<(), CoreError> {
-        self.input.validate()?;
         self.control.validate()?;
         self.provider.validate()?;
         self.audio.validate()?;

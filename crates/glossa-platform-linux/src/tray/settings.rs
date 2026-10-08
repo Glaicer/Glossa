@@ -201,10 +201,7 @@ fn insert_missing_section(
 fn take_trailing_blank_lines(updated: &mut String) -> String {
     let mut trailing = String::new();
 
-    loop {
-        let Some(line_end) = updated.rfind('\n') else {
-            break;
-        };
+    while let Some(line_end) = updated.rfind('\n') {
         let line_start = updated[..line_end].rfind('\n').map_or(0, |index| index + 1);
         let line = &updated[line_start..line_end];
 
@@ -265,6 +262,7 @@ pub(super) fn provider_kind_id(value: ProviderKind) -> &'static str {
     match value {
         ProviderKind::Groq => "groq",
         ProviderKind::OpenAi => "openai",
+        ProviderKind::OpenRouter => "openrouter",
         ProviderKind::OpenAiCompatible => "openai-compatible",
     }
 }
@@ -273,6 +271,7 @@ pub(super) fn parse_provider_kind(value: &str) -> Option<ProviderKind> {
     match value {
         "groq" => Some(ProviderKind::Groq),
         "openai" => Some(ProviderKind::OpenAi),
+        "openrouter" => Some(ProviderKind::OpenRouter),
         "openai-compatible" => Some(ProviderKind::OpenAiCompatible),
         _ => None,
     }
@@ -486,6 +485,18 @@ mod tests {
     use glossa_core::{InputBackend, InputMode, LatencyMode, PasteMode, ProviderKind, UiTheme};
 
     use super::{apply_settings_to_config, quoted, SettingsValues};
+
+    #[test]
+    fn openrouter_should_round_trip_settings_id() {
+        assert_eq!(
+            super::provider_kind_id(ProviderKind::OpenRouter),
+            "openrouter"
+        );
+        assert_eq!(
+            super::parse_provider_kind("openrouter"),
+            Some(ProviderKind::OpenRouter)
+        );
+    }
 
     fn valid_config_source() -> String {
         r#"[input]

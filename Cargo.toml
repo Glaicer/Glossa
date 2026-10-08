@@ -34,7 +34,7 @@ toml = "=0.8.8"
 tracing = "0.1.41"
 tracing-subscriber = { version = "=0.3.19", features = ["env-filter", "fmt"] }
 uuid = { version = "=1.11.0", features = ["serde", "v4"] }
-ashpd = { version = "=0.8.1", default-features = false, features = ["tokio"] }
+ashpd = { version = "=0.8.2", default-features = false, features = ["tokio"] }
 tray-icon = "=0.17.0"
 
 [workspace.lints.rust]

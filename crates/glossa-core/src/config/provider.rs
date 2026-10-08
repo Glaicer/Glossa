@@ -44,3 +44,21 @@ impl ProviderConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openrouter_should_allow_default_url_but_require_api_key() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::OpenRouter,
+            base_url: None,
+            model: "openai/whisper-large-v3".into(),
+            api_key: SecretSource::Env("OPENROUTER_API_KEY".into()),
+        };
+        assert!(config.validate().is_ok());
+        config.api_key = SecretSource::Empty;
+        assert!(config.validate().is_err());
+    }
+}

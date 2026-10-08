@@ -11,11 +11,11 @@ enable_cli = true
 socket_path = "auto"
 
 [provider]
-# Selects the speech-to-text provider mode; options: "groq", "openai", "openai-compatible".
+# Selects the speech-to-text provider mode; options: "groq", "openai", "openrouter", "openai-compatible".
 kind = "groq"
-# Sets the provider base URL; options: provider-specific HTTPS base URL, required for "openai-compatible".
+# Sets the provider base URL; required for "openai-compatible". For "openrouter", use "https://openrouter.ai/api/v1" or omit this field.
 base_url = "https://api.groq.com/openai/v1"
-# Selects the transcription model; options depend on provider, for example Groq: "whisper-large-v3", "whisper-large-v3-turbo"; OpenAI: "whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe".
+# Selects the transcription model; examples: Groq: "whisper-large-v3-turbo"; OpenAI: "gpt-4o-mini-transcribe"; OpenRouter: "openai/whisper-large-v3".
 model = "whisper-large-v3-turbo"
 # References the provider key stored in Secret Service. "env:VARIABLE_NAME" is also supported.
 api_key = "secret-service:provider"

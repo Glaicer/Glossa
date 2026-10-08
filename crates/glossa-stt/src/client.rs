@@ -187,6 +187,7 @@ pub fn build_http_client(
         .unwrap_or_else(|| match config.kind {
             ProviderKind::Groq => "https://api.groq.com/openai/v1".into(),
             ProviderKind::OpenAi => "https://api.openai.com/v1".into(),
+            ProviderKind::OpenRouter => "https://openrouter.ai/api/v1".into(),
             ProviderKind::OpenAiCompatible => unreachable!("validated elsewhere"),
         });
     let endpoint = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));

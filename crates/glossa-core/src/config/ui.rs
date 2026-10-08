@@ -4,17 +4,12 @@ use serde::{Deserialize, Serialize};
 use crate::CoreError;
 
 /// Visual theme used to pick tray icons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UiTheme {
+    #[default]
     Light,
     Dark,
-}
-
-impl Default for UiTheme {
-    fn default() -> Self {
-        Self::Light
-    }
 }
 
 /// Tray icons and cue sounds used by the daemon.
@@ -148,7 +143,9 @@ mod tests {
         assert_eq!(ui.recording_tray_icon(), ui.recording_icon.as_path());
         assert_eq!(
             ui.processing_tray_icon(),
-            ui.processing_icon.as_deref().unwrap()
+            ui.processing_icon
+                .as_deref()
+                .expect("default processing icon")
         );
     }
 }

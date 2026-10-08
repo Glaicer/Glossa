@@ -65,7 +65,7 @@ impl XdgTempStore {
             let should_remove_file = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| should_remove(name));
+                .is_some_and(&mut should_remove);
             if should_remove_file {
                 let _ = fs::remove_file(path).await;
             }

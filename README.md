@@ -8,7 +8,7 @@
 
 Glossa is a free, open source speech-to-text daemon for Ubuntu on GNOME Wayland. It records audio from your microphone, sends it to a speech-to-text provider, copies the result to the clipboard, and pastes it into the active window.
 
-It works with Groq, OpenAI, and other OpenAI-compatible speech-to-text providers, including self-hosted ones.
+It works with Groq, OpenAI, OpenRouter, and other OpenAI-compatible speech-to-text providers, including self-hosted ones.
 
 I personally recommend using [Groq](https://groq.com/) as it offers the following benefits:
 
@@ -20,7 +20,7 @@ I personally recommend using [Groq](https://groq.com/) as it offers the followin
 
 - Starts automatically with your system and works as a background daemon. Pastes transcribed text to the active input inside any window.
 - Supports both toggle and push-to-talk modes.
-- Works with Groq, OpenAI, and other OpenAI-compatible STT providers (including self-hosted setups).
+- Works with Groq, OpenAI, OpenRouter, and other OpenAI-compatible STT providers (including self-hosted setups).
 - Can optionally run each transcription through an OpenAI-compatible LLM enhancer before pasting, to fix punctuation and obvious transcription mistakes.
 - Easily configurable via `config.toml`.
 - Manage the installed user service with `glossa service start`, `stop`, and `restart`.
@@ -86,6 +86,22 @@ If you want to configure Glossa manually, edit `~/.config/glossa/config.toml`. U
 API keys entered through the installer or tray are stored in the desktop Secret Service, not in `config.toml`. The config contains only `secret-service:provider` or `secret-service:llm`. Legacy literal keys are migrated automatically when the daemon starts. `env:VARIABLE_NAME` remains supported for users who prefer environment-based secrets.
 
 The tray has an `AI enhancer` checkbox. When it is off, Glossa pastes the speech-to-text result directly. When it is on, Glossa sends the transcribed text to the OpenAI-compatible chat endpoint first, then pastes the corrected response. Configure `enabled`, `base_url`, `model`, and `api_key` in the tray Settings → `LLM enhancer` window or in the `[LLM]` section of `config.toml`.
+
+### OpenRouter transcription
+
+Select `openrouter` in tray Settings or configure:
+
+```toml
+[provider]
+kind = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/whisper-large-v3"
+api_key = "env:OPENROUTER_API_KEY"
+```
+
+Use the exact STT model ID from OpenRouter, not its display name. The base URL can be omitted for `openrouter`; when switching from another provider, replace its existing base URL. Store the key through the tray or installer to use `secret-service:provider` instead.
+
+Glossa uses OpenRouter's [speech-to-text endpoint](https://openrouter.ai/docs/guides/overview/multimodal/stt): `POST /api/v1/audio/transcriptions`, Bearer authentication, and a multipart upload with `file` and `model`. The JSON response's `text` is pasted; optional `usage` is ignored. Multipart uploads are limited to 25 MB. Audio-capable chat models use a different API and are not supported as STT models by this integration.
 
 ## Updating
 

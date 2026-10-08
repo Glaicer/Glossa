@@ -220,14 +220,13 @@ fn open_keyboard_devices() -> Result<Vec<Device>, String> {
 
         match Device::open(&path) {
             Ok(device) => {
-                if device.supported_events().contains(EventType::KEY) {
-                    if device
+                if device.supported_events().contains(EventType::KEY)
+                    && device
                         .supported_keys()
                         .is_some_and(|keys| keys.contains(KeyCode::KEY_A))
-                    {
-                        debug!(path = %path.display(), name = ?device.name(), "opened keyboard device");
-                        devices.push(device);
-                    }
+                {
+                    debug!(path = %path.display(), name = ?device.name(), "opened keyboard device");
+                    devices.push(device);
                 }
             }
             Err(error) => {
@@ -378,7 +377,7 @@ mod tests {
 
     #[test]
     fn parse_ctrl_backslash() {
-        let keys = parse_accelerator_keys("Press <Ctrl>backslash").unwrap();
+        let keys = parse_accelerator_keys("Press <Ctrl>backslash").expect("valid Ctrl shortcut");
         assert!(keys.contains(&KeyCode::KEY_LEFTCTRL));
         assert!(keys.contains(&KeyCode::KEY_BACKSLASH));
         assert_eq!(keys.len(), 2);
@@ -386,7 +385,8 @@ mod tests {
 
     #[test]
     fn parse_alt_super_space() {
-        let keys = parse_accelerator_keys("Press <Alt><Super>space").unwrap();
+        let keys =
+            parse_accelerator_keys("Press <Alt><Super>space").expect("valid Alt+Super shortcut");
         assert!(keys.contains(&KeyCode::KEY_LEFTALT));
         assert!(keys.contains(&KeyCode::KEY_LEFTMETA));
         assert!(keys.contains(&KeyCode::KEY_SPACE));
@@ -395,14 +395,14 @@ mod tests {
 
     #[test]
     fn parse_single_key() {
-        let keys = parse_accelerator_keys("Press backslash").unwrap();
+        let keys = parse_accelerator_keys("Press backslash").expect("valid single-key shortcut");
         assert!(keys.contains(&KeyCode::KEY_BACKSLASH));
         assert_eq!(keys.len(), 1);
     }
 
     #[test]
     fn parse_without_press_prefix() {
-        let keys = parse_accelerator_keys("<Shift>a").unwrap();
+        let keys = parse_accelerator_keys("<Shift>a").expect("valid shortcut without prefix");
         assert!(keys.contains(&KeyCode::KEY_LEFTSHIFT));
         assert!(keys.contains(&KeyCode::KEY_A));
     }

@@ -511,7 +511,7 @@ prompt_input_mode() {
 
 prompt_provider() {
   while true; do
-    prompt $'What API provider would you like to use?\n\n1) Groq (default)\n2) OpenAI\n3) Other / self-hosted\n\nSelection [1]: '
+    prompt $'What API provider would you like to use?\n\n1) Groq (default)\n2) OpenAI\n3) Other / self-hosted\n4) OpenRouter\n\nSelection [1]: '
     case "$(normalize_answer "$(read_tty)")" in
       "" | 1 | "1)" | groq)
         provider_kind="groq"
@@ -533,14 +533,27 @@ prompt_provider() {
         manual_provider_setup=1
         return 0
         ;;
+      4 | "4)" | openrouter)
+        provider_kind="openrouter"
+        provider_base_url="https://openrouter.ai/api/v1"
+        manual_provider_setup=0
+        return 0
+        ;;
       *)
-        log "Please choose 1, 2, or 3."
+        log "Please choose 1, 2, 3, or 4."
         ;;
     esac
   done
 }
 
 prompt_model() {
+  if [[ "${provider_kind}" == "openrouter" ]]; then
+    prompt 'OpenRouter STT model ID [openai/whisper-large-v3]: '
+    provider_model="$(read_tty)"
+    provider_model="${provider_model:-openai/whisper-large-v3}"
+    return 0
+  fi
+
   if [[ "${provider_kind}" == "groq" ]]; then
     while true; do
       prompt $'What model would you like to use?\n\n1) Whisper Large V3 Turbo (default)\n2) Whisper Large V3\n\nSelection [1]: '

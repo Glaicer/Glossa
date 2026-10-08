@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -49,8 +49,8 @@ pub fn init_tracing(config: &AppConfig) -> anyhow::Result<()> {
 }
 
 /// Builds the app actor and its dependencies from a validated config.
-pub fn build_tray(config_path: &PathBuf, config: &AppConfig) -> Arc<BestEffortTrayPort> {
-    Arc::new(BestEffortTrayPort::new(config_path.clone(), config))
+pub fn build_tray(config_path: &Path, config: &AppConfig) -> Arc<BestEffortTrayPort> {
+    Arc::new(BestEffortTrayPort::new(config_path.to_path_buf(), config))
 }
 
 /// Builds the app actor and its dependencies from a validated config.

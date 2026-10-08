@@ -359,8 +359,8 @@ impl TrayRuntime {
         let settings_id = settings_item.id().clone();
         let update_item = MenuItem::new("Update", true, None);
         let update_id = update_item.id().clone();
-        let version_item = MenuItem::new(&tray_version_label(), false, None);
-        let mic_stream_item = CheckMenuItem::new(&mic_stream_label(false), true, false, None);
+        let version_item = MenuItem::new(tray_version_label(), false, None);
+        let mic_stream_item = CheckMenuItem::new(mic_stream_label(false), true, false, None);
         let mic_stream_id = mic_stream_item.id().clone();
         let llm_enhancer_item =
             CheckMenuItem::new("AI enhancer", true, settings.llm_enabled, None);
@@ -572,14 +572,7 @@ impl TrayRuntime {
             return;
         };
 
-        let captured = match capture_shortcut(&binding) {
-            Ok(result) => result,
-            Err(error) => {
-                warn!(error = %error, "failed to capture shortcut from tray");
-                let _ = show_message_dialog("Change shortcut", &error, MessageType::Error);
-                return;
-            }
-        };
+        let captured = capture_shortcut(&binding);
 
         let Some(shortcut) = captured else {
             info!("shortcut change cancelled from tray");
@@ -738,7 +731,9 @@ fn normalize_rgba(bytes: &[u8], color_type: ColorType) -> Result<Vec<u8>, &'stat
     let rgba = match color_type {
         ColorType::Rgba => bytes.to_vec(),
         ColorType::Rgb => bytes
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|chunk| [chunk[0], chunk[1], chunk[2], u8::MAX])
             .collect(),
         ColorType::Grayscale => bytes
@@ -746,7 +741,9 @@ fn normalize_rgba(bytes: &[u8], color_type: ColorType) -> Result<Vec<u8>, &'stat
             .flat_map(|value| [*value, *value, *value, u8::MAX])
             .collect(),
         ColorType::GrayscaleAlpha => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|chunk| [chunk[0], chunk[0], chunk[0], chunk[1]])
             .collect(),
         ColorType::Indexed => return Err("indexed PNG tray icons are unsupported"),
@@ -771,7 +768,7 @@ fn tray_icon_temp_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn capture_shortcut(binding: &ShortcutBindingConfig) -> Result<Option<String>, String> {
+fn capture_shortcut(binding: &ShortcutBindingConfig) -> Option<String> {
     let _capture_guard = begin_shortcut_capture();
     let dialog = Dialog::with_buttons(
         Some("Change shortcut"),
@@ -843,9 +840,9 @@ fn capture_shortcut(binding: &ShortcutBindingConfig) -> Result<Option<String>, S
     dialog.close();
 
     if response == ResponseType::Accept {
-        Ok(captured.borrow().clone())
+        captured.borrow().clone()
     } else {
-        Ok(None)
+        None
     }
 }
 
@@ -1024,6 +1021,20 @@ mod tests {
         shortcut_override_value, tray_version_label, ShortcutBindingConfig,
     };
     use glossa_core::InputMode;
+
+    #[test]
+    fn rgba_conversion_should_preserve_pixels_and_ignore_incomplete_chunks() {
+        assert_eq!(
+            super::normalize_rgba(&[1, 2, 3, 4, 5, 6, 7], png::ColorType::Rgb)
+                .expect("RGB conversion"),
+            vec![1, 2, 3, 255, 4, 5, 6, 255]
+        );
+        assert_eq!(
+            super::normalize_rgba(&[10, 20, 30, 40, 50], png::ColorType::GrayscaleAlpha)
+                .expect("grayscale alpha conversion"),
+            vec![10, 10, 10, 20, 30, 30, 30, 40]
+        );
+    }
 
     #[test]
     fn captured_shortcut_should_use_ctrl_alias() {

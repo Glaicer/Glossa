@@ -18,9 +18,9 @@ const INPUT_MODE_TOOLTIP: &str =
 const ENABLE_CLI_TOOLTIP: &str =
     "Enables the CLI control channel used by commands like `glossa ctl toggle`.";
 const PROVIDER_KIND_TOOLTIP: &str =
-    "Selects the speech-to-text provider mode. Options: groq, openai, or openai-compatible.";
+    "Selects the speech-to-text provider mode. Options: groq, openai, openrouter, or openai-compatible.";
 const PROVIDER_BASE_URL_TOOLTIP: &str =
-    "Sets the provider base URL. Required for openai-compatible configurations.";
+    "Sets the provider base URL. Required for openai-compatible; OpenRouter uses https://openrouter.ai/api/v1 when omitted.";
 const PROVIDER_MODEL_TOOLTIP: &str =
     "Sets the transcription model that the configured provider should use.";
 const PROVIDER_API_KEY_TOOLTIP: &str =
@@ -107,6 +107,7 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
         &[
             ("groq", "groq"),
             ("openai", "openai"),
+            ("openrouter", "openrouter"),
             ("openai-compatible", "openai-compatible"),
         ],
         provider_kind_id(current.provider_kind),
@@ -243,7 +244,7 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
                 });
             }
             ResponseType::Help => {
-                if let Some(settings) = edit_llm_settings(current)? {
+                if let Some(settings) = edit_llm_settings(current) {
                     break Some(settings);
                 }
             }
@@ -255,7 +256,7 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
     Ok(result)
 }
 
-fn edit_llm_settings(current: &SettingsValues) -> Result<Option<SettingsValues>, AppError> {
+fn edit_llm_settings(current: &SettingsValues) -> Option<SettingsValues> {
     let dialog = Dialog::with_buttons(
         Some("LLM Enhancer Settings"),
         None::<&Window>,
@@ -313,7 +314,7 @@ fn edit_llm_settings(current: &SettingsValues) -> Result<Option<SettingsValues>,
     };
 
     dialog.close();
-    Ok(result)
+    result
 }
 
 fn create_section_grid() -> Grid {

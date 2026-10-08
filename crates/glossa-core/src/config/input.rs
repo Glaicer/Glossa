@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::CoreError;
-
 /// Input backend used to receive global recording commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -34,11 +32,5 @@ impl Default for InputConfig {
             shortcut: "<Ctrl><Alt>space".into(),
             mode: InputMode::Toggle,
         }
-    }
-}
-
-impl InputConfig {
-    pub(crate) fn validate(&self) -> Result<(), CoreError> {
-        Ok(())
     }
 }

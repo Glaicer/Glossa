@@ -7,6 +7,8 @@ pub enum ProviderKind {
     Groq,
     #[serde(rename = "openai", alias = "open-ai")]
     OpenAi,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
     #[serde(rename = "openai-compatible", alias = "open-ai-compatible")]
     OpenAiCompatible,
 }
@@ -15,11 +17,11 @@ pub use crate::config::ProviderConfig;
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
     use super::ProviderKind;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Serialize)]
     struct ProviderKindDocument {
         kind: ProviderKind,
     }
@@ -30,6 +32,17 @@ mod tests {
             toml::from_str("kind = \"openai-compatible\"").expect("documented value should parse");
 
         assert_eq!(document.kind, ProviderKind::OpenAiCompatible);
+    }
+
+    #[test]
+    fn provider_kind_should_round_trip_openrouter() {
+        let document: ProviderKindDocument =
+            toml::from_str("kind = \"openrouter\"").expect("openrouter should parse");
+        assert_eq!(document.kind, ProviderKind::OpenRouter);
+        assert_eq!(
+            toml::to_string(&document).expect("should serialize"),
+            "kind = \"openrouter\"\n"
+        );
     }
 
     #[test]
