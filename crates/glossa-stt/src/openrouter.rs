@@ -19,12 +19,29 @@ mod tests {
     use tokio::net::TcpListener;
 
     use glossa_app::ports::StaticApiKey;
-    use glossa_core::{AppConfig, CapturedAudio, ProviderKind, SessionId};
+    use glossa_core::{AppConfig, AudioFormat, CapturedAudio, ProviderKind, SessionId};
 
     use super::*;
 
     #[tokio::test]
     async fn openrouter_should_upload_multipart_and_decode_text_with_usage() {
+        check_upload(AudioFormat::Wav, "audio/wav").await;
+    }
+
+    #[tokio::test]
+    async fn compressed_formats_should_upload_with_correct_filename_and_mime() {
+        for (format, mime) in [
+            (AudioFormat::Mp3, "audio/mpeg"),
+            (AudioFormat::M4a, "audio/mp4"),
+            (AudioFormat::Flac, "audio/flac"),
+            (AudioFormat::Ogg, "audio/ogg"),
+            (AudioFormat::Aac, "audio/aac"),
+        ] {
+            check_upload(format, mime).await;
+        }
+    }
+
+    async fn check_upload(format: AudioFormat, mime: &str) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("local address");
         let server = tokio::spawn(async move {
@@ -63,7 +80,10 @@ mod tests {
         });
 
         let session_id = SessionId::new();
-        let path = std::env::temp_dir().join(format!("glossa-openrouter-{session_id}.wav"));
+        let path = std::env::temp_dir().join(format!(
+            "glossa-openrouter-{session_id}.{}",
+            format.extension()
+        ));
         tokio::fs::write(&path, b"RIFF-test-audio")
             .await
             .expect("write audio");
@@ -92,7 +112,11 @@ mod tests {
         assert!(request.contains("multipart/form-data; boundary="));
         assert!(request.contains("name=\"model\"\r\n\r\nopenai/whisper-large-v3"));
         assert!(request.contains("name=\"file\"; filename=\"glossa-openrouter-"));
-        assert!(request.contains("Content-Type: audio/wav"));
+        assert!(request.contains(&format!(
+            "filename=\"glossa-openrouter-{session_id}.{}\"",
+            format.extension()
+        )));
+        assert!(request.contains(&format!("Content-Type: {mime}")));
         assert!(request.contains("RIFF-test-audio"));
     }
 }

@@ -8,7 +8,11 @@ use crate::SessionId;
 #[serde(rename_all = "kebab-case")]
 pub enum AudioFormat {
     Wav,
+    Mp3,
+    M4a,
     Flac,
+    Ogg,
+    Aac,
 }
 
 impl AudioFormat {
@@ -17,7 +21,38 @@ impl AudioFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Wav => "wav",
+            Self::Mp3 => "mp3",
+            Self::M4a => "m4a",
             Self::Flac => "flac",
+            Self::Ogg => "ogg",
+            Self::Aac => "aac",
+        }
+    }
+
+    /// Parses a supported audio file extension.
+    #[must_use]
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension {
+            "wav" => Some(Self::Wav),
+            "mp3" => Some(Self::Mp3),
+            "m4a" => Some(Self::M4a),
+            "flac" => Some(Self::Flac),
+            "ogg" => Some(Self::Ogg),
+            "aac" => Some(Self::Aac),
+            _ => None,
+        }
+    }
+
+    /// Returns the MIME type used for transcription uploads.
+    #[must_use]
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            Self::Wav => "audio/wav",
+            Self::Mp3 => "audio/mpeg",
+            Self::M4a => "audio/mp4",
+            Self::Flac => "audio/flac",
+            Self::Ogg => "audio/ogg",
+            Self::Aac => "audio/aac",
         }
     }
 }

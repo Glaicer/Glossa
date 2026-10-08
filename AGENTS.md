@@ -149,6 +149,7 @@ The heart of the application. Defines **port traits** and the **pure reducer**.
 **Port traits** (in `ports/`):
 - `AudioCapture` / `ActiveRecording` — start/stop microphone recording
 - `SilenceTrimmer` — trim leading/trailing silence from captured audio
+- `AudioEncoder` — encode processed WAV into the configured upload format
 - `CuePlayer` — play start/stop sound effects
 - `SttClient` — send audio to a transcription API
 - `ClipboardWriter` — put text into the clipboard
@@ -179,6 +180,8 @@ The heart of the application. Defines **port traits** and the **pure reducer**.
 | `wav/reader.rs` | WAV reading utilities |
 | `trim/energy_gate.rs` | Silence detection via absolute amplitude threshold |
 | `cue/rodio_player.rs` | `RodioCuePlayer` implements `CuePlayer`; plays WAV files via rodio |
+
+Capture and silence trimming always use WAV, regardless of `audio.format`. The pipeline encodes only after trimming and duration checks. Non-WAV encoding and encoder tests require system FFmpeg with `libmp3lame`, `aac`, `flac`, and `libvorbis` encoders.
 
 ### `glossa-stt` — Speech-to-Text Clients
 
@@ -401,6 +404,7 @@ glossa update → glossa-bin::cmd::update → glossa-platform-linux::updater::ru
 | `wl-copy` | Wayland clipboard write | `wl-clipboard` |
 | `dotool` | Keyboard paste emulation | `dotool` |
 | `dconf` | GNOME settings (shortcut rebind) | `dconf-cli` |
+| `ffmpeg` | Encode non-WAV uploads | `ffmpeg` (Ubuntu), `ffmpeg-free` (Fedora) |
 
 The tray requires the **AppIndicator and KStatusNotifierItem Support** GNOME Shell extension. If absent, the daemon continues without tray — it does not crash.
 Installer and updater scripts additionally rely on standard user-session tooling such as `systemctl`, `tar`, `sha256sum`, and `curl`/`wget`.
@@ -448,4 +452,3 @@ ExecStart=%h/.cargo/bin/glossa --config %h/.config/glossa/config.toml daemon
 - GUI settings window
 - System-wide daemon
 - Multiple microphones with UI switching
-- FLAC recording format (schema exists, implementation pending)

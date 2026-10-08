@@ -6,7 +6,10 @@ use tracing::{info, warn};
 use glossa_core::{AppConfig, CapturedAudio, SessionId};
 
 use crate::{
-    ports::{ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore, TextEnhancer},
+    ports::{
+        AudioEncoder, ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore,
+        TextEnhancer,
+    },
     AppError,
 };
 
@@ -43,6 +46,7 @@ pub enum CycleOutcome {
 pub struct PipelineDependencies {
     pub config: Arc<AppConfig>,
     pub trimmer: Arc<dyn SilenceTrimmer>,
+    pub encoder: Arc<dyn AudioEncoder>,
     pub stt_client: Arc<dyn SttClient>,
     pub text_enhancer: Arc<dyn TextEnhancer>,
     pub clipboard: Arc<dyn ClipboardWriter>,
@@ -89,6 +93,22 @@ pub fn spawn_processing_task(
             });
             return;
         }
+
+        let processed_audio = match deps
+            .encoder
+            .encode(&processed_audio, deps.config.audio.format)
+            .await
+        {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                let _ = deps.temp_store.cleanup_session(session_id).await;
+                let _ = tx.send(InternalEvent::ProcessingFinished {
+                    session_id,
+                    outcome: CycleOutcome::Failed(error.to_string()),
+                });
+                return;
+            }
+        };
 
         info!(%session_id, provider = deps.stt_client.provider_name(), "starting transcription");
         match deps.stt_client.transcribe(&processed_audio).await {
@@ -262,8 +282,8 @@ mod tests {
     };
     use crate::{
         ports::{
-            ClipboardSnapshot, ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore,
-            TextEnhancer,
+            AudioEncoder, ClipboardSnapshot, ClipboardWriter, PasteBackend, SilenceTrimmer,
+            SttClient, TempStore, TextEnhancer,
         },
         AppError,
     };
@@ -372,6 +392,17 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl AudioEncoder for NoopTrimmer {
+        async fn encode(
+            &self,
+            input: &CapturedAudio,
+            _format: AudioFormat,
+        ) -> Result<CapturedAudio, AppError> {
+            Ok(input.clone())
+        }
+    }
+
     struct NoopSttClient;
 
     #[async_trait]
@@ -426,6 +457,7 @@ mod tests {
             PipelineDependencies {
                 config: Arc::new(config),
                 trimmer: Arc::new(NoopTrimmer),
+                encoder: Arc::new(NoopTrimmer),
                 stt_client: Arc::new(NoopSttClient),
                 text_enhancer: Arc::new(crate::ports::NoopTextEnhancer),
                 clipboard: clipboard.clone(),
@@ -601,6 +633,7 @@ mod tests {
             PipelineDependencies {
                 config: Arc::new(config),
                 trimmer: Arc::new(NoopTrimmer),
+                encoder: Arc::new(NoopTrimmer),
                 stt_client: Arc::new(FixedSttClient { text: stt_text }),
                 text_enhancer: enhancer.clone(),
                 clipboard: Arc::new(RecordingClipboard::new()),
@@ -712,6 +745,131 @@ mod tests {
                 other => panic!("expected Failed, got {other:?}"),
             },
             other => panic!("expected ProcessingFinished, got {other:?}"),
+        }
+    }
+
+    struct PipelineProbe {
+        events: Mutex<Vec<&'static str>>,
+        fail_encoding: bool,
+    }
+
+    #[async_trait]
+    impl SilenceTrimmer for PipelineProbe {
+        async fn trim(&self, input: &CapturedAudio) -> Result<CapturedAudio, AppError> {
+            assert_eq!(input.path.extension(), Some("wav"));
+            self.events.lock().expect("events lock").push("trim");
+            Ok(CapturedAudio {
+                path: input.path.with_file_name("test.trimmed.wav"),
+                duration_ms: 500,
+                ..input.clone()
+            })
+        }
+    }
+
+    #[async_trait]
+    impl AudioEncoder for PipelineProbe {
+        async fn encode(
+            &self,
+            input: &CapturedAudio,
+            format: AudioFormat,
+        ) -> Result<CapturedAudio, AppError> {
+            assert_eq!(input.path.file_name(), Some("test.trimmed.wav"));
+            assert_eq!(input.duration_ms, 500);
+            assert_eq!(format, AudioFormat::Mp3);
+            self.events.lock().expect("events lock").push("encode");
+            if self.fail_encoding {
+                return Err(AppError::message("encoding failed"));
+            }
+            Ok(CapturedAudio {
+                path: input.path.with_extension(format.extension()),
+                ..input.clone()
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SttClient for PipelineProbe {
+        fn provider_name(&self) -> &'static str {
+            "test"
+        }
+
+        async fn transcribe(&self, audio: &CapturedAudio) -> Result<String, AppError> {
+            assert_eq!(audio.path.file_name(), Some("test.trimmed.mp3"));
+            self.events.lock().expect("events lock").push("transcribe");
+            Ok("hello".into())
+        }
+    }
+
+    #[async_trait]
+    impl TempStore for PipelineProbe {
+        async fn create_recording_path(
+            &self,
+            _session_id: SessionId,
+            _format: AudioFormat,
+        ) -> Result<Utf8PathBuf, AppError> {
+            Err(AppError::message("unused"))
+        }
+
+        async fn cleanup_session(&self, _session_id: SessionId) -> Result<(), AppError> {
+            self.events.lock().expect("events lock").push("cleanup");
+            Ok(())
+        }
+
+        async fn purge_session(&self, _session_id: SessionId) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn cleanup_stale_files(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn processing_should_encode_after_trimming_and_skip_upload_on_encoding_failure() {
+        for fail_encoding in [false, true] {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (mut deps, _) =
+                processing_dependencies(false, "unused".into(), Ok("unused".into()));
+            Arc::make_mut(&mut deps.config).audio.format = AudioFormat::Mp3;
+            let probe = Arc::new(PipelineProbe {
+                events: Mutex::new(Vec::new()),
+                fail_encoding,
+            });
+            deps.trimmer = probe.clone();
+            deps.encoder = probe.clone();
+            deps.stt_client = probe.clone();
+            deps.temp_store = probe.clone();
+            let audio = CapturedAudio {
+                session_id: SessionId::new(),
+                path: "/tmp/test.wav".into(),
+                duration_ms: 1000,
+                sample_rate_hz: 16000,
+                channels: 1,
+            };
+            let session_id = audio.session_id;
+
+            spawn_processing_task(tx, deps, audio);
+
+            let event = rx.recv().await.expect("processing event");
+            if fail_encoding {
+                assert!(matches!(event, InternalEvent::ProcessingFinished {
+                    session_id: id,
+                    outcome: CycleOutcome::Failed(ref message),
+                } if id == session_id && message == "encoding failed"));
+                assert_eq!(
+                    *probe.events.lock().expect("events lock"),
+                    ["trim", "encode", "cleanup"]
+                );
+            } else {
+                assert!(matches!(event, InternalEvent::ProcessingReady {
+                    session_id: id,
+                    ref text,
+                } if id == session_id && text == "hello"));
+                assert_eq!(
+                    *probe.events.lock().expect("events lock"),
+                    ["trim", "encode", "transcribe"]
+                );
+            }
         }
     }
 }

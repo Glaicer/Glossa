@@ -7,14 +7,14 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use glossa_core::{
-    AppCommand, AppConfig, AppState, LatencyMode, PastingState, RecordSpec, SessionId,
+    AppCommand, AppConfig, AppState, AudioFormat, LatencyMode, PastingState, RecordSpec, SessionId,
 };
 
 use crate::{
     machine::{reduce, Action},
     ports::{
-        ActiveRecording, AudioCapture, ClipboardWriter, CuePlayer, PasteBackend, SilenceTrimmer,
-        SttClient, TempStore, TextEnhancer, TrayPort, TrayState,
+        ActiveRecording, AudioCapture, AudioEncoder, ClipboardWriter, CuePlayer, PasteBackend,
+        SilenceTrimmer, SttClient, TempStore, TextEnhancer, TrayPort, TrayState,
     },
     services::{
         command_router::AppHandle,
@@ -32,6 +32,7 @@ use crate::{
 pub struct AppDependencies {
     pub audio_capture: Arc<dyn AudioCapture>,
     pub trimmer: Arc<dyn SilenceTrimmer>,
+    pub encoder: Arc<dyn AudioEncoder>,
     pub cue_player: Arc<dyn CuePlayer>,
     pub stt_client: Arc<dyn SttClient>,
     pub text_enhancer: Arc<dyn TextEnhancer>,
@@ -270,13 +271,13 @@ impl AppActor {
         let path = self
             .deps
             .temp_store
-            .create_recording_path(session_id, self.config.audio.format)
+            .create_recording_path(session_id, AudioFormat::Wav)
             .await?;
         let path_prep_ms = path_started_at.elapsed().as_millis();
         let spec = RecordSpec {
             sample_rate_hz: self.config.audio.sample_rate_hz,
             channels: self.config.audio.channels,
-            format: self.config.audio.format,
+            format: AudioFormat::Wav,
             max_duration_sec: self.config.audio.max_duration_sec,
         };
         let capture_started_at = Instant::now();
@@ -516,6 +517,7 @@ impl AppActor {
         PipelineDependencies {
             config: Arc::clone(&self.config),
             trimmer: Arc::clone(&self.deps.trimmer),
+            encoder: Arc::clone(&self.deps.encoder),
             stt_client: Arc::clone(&self.deps.stt_client),
             text_enhancer: Arc::clone(&self.deps.text_enhancer),
             clipboard: Arc::clone(&self.deps.clipboard),
@@ -583,7 +585,9 @@ mod tests {
             spec: RecordSpec,
             path: &Utf8Path,
         ) -> Result<Box<dyn ActiveRecording>, AppError> {
-            let _ = (session_id, spec, path);
+            let _ = session_id;
+            assert_eq!(spec.format, AudioFormat::Wav);
+            assert_eq!(path.extension(), Some("wav"));
             *self.started.lock().expect("mutex should not be poisoned") = true;
             Ok(Box::new(FakeRecording))
         }
@@ -766,6 +770,17 @@ mod tests {
     #[async_trait]
     impl SilenceTrimmer for FakeTrimmer {
         async fn trim(&self, input: &CapturedAudio) -> Result<CapturedAudio, AppError> {
+            Ok(input.clone())
+        }
+    }
+
+    #[async_trait]
+    impl AudioEncoder for FakeTrimmer {
+        async fn encode(
+            &self,
+            input: &CapturedAudio,
+            _format: AudioFormat,
+        ) -> Result<CapturedAudio, AppError> {
             Ok(input.clone())
         }
     }
@@ -997,6 +1012,7 @@ mod tests {
                 started: Arc::new(Mutex::new(false)),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1010,6 +1026,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compressed_upload_format_should_still_capture_wav() {
+        let started = Arc::new(Mutex::new(false));
+        let deps = AppDependencies {
+            audio_capture: Arc::new(FakeAudioCapture {
+                started: started.clone(),
+            }),
+            trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
+            cue_player: Arc::new(FakeCuePlayer),
+            stt_client: Arc::new(FakeSttClient),
+            text_enhancer: Arc::new(NoopTextEnhancer),
+            clipboard: Arc::new(FakeClipboard),
+            paste: Arc::new(FakePaste),
+            tray: Arc::new(crate::ports::NullTrayPort),
+            temp_store: Arc::new(FakeTempStore),
+        };
+        let mut config = AppConfig::default();
+        config.audio.format = AudioFormat::Mp3;
+        let (mut actor, _handle) = AppActor::new(config, deps);
+
+        actor
+            .start_recording(SessionId::new())
+            .await
+            .expect("start recording");
+
+        assert!(*started.lock().expect("started lock"));
+    }
+
+    #[tokio::test]
     async fn actor_should_start_recording_before_playing_start_cue() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let deps = AppDependencies {
@@ -1017,6 +1062,7 @@ mod tests {
                 events: Arc::clone(&events),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(OrderedCuePlayer {
                 events: Arc::clone(&events),
             }),
@@ -1051,6 +1097,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1092,6 +1139,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1167,6 +1215,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(TrackingCuePlayer {
                 events: Arc::clone(&cue_events),
             }),
@@ -1267,6 +1316,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1302,6 +1352,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1358,6 +1409,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1413,6 +1465,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),
@@ -1460,6 +1513,7 @@ mod tests {
                 lifecycle: Arc::clone(&lifecycle),
             }),
             trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
             cue_player: Arc::new(FakeCuePlayer),
             stt_client: Arc::new(FakeSttClient),
             text_enhancer: Arc::new(NoopTextEnhancer),

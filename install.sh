@@ -321,6 +321,16 @@ ensure_wl_copy() {
     || die "wl-copy is installed at ${wl_copy_path}, but 'wl-copy --version' failed."
 }
 
+ensure_ffmpeg() {
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    log "FFmpeg was not found. Installing it for non-WAV audio formats."
+    install_system_packages "$(package_name_for_distro ffmpeg ffmpeg-free)"
+    command -v ffmpeg >/dev/null 2>&1 || die "FFmpeg is still unavailable after installing it."
+  fi
+
+  ffmpeg -version >/dev/null 2>&1 || die "FFmpeg is installed, but 'ffmpeg -version' failed."
+}
+
 ensure_notify_send() {
   if command -v notify-send >/dev/null 2>&1; then
     notify_send_path="$(command -v notify-send)"
@@ -906,6 +916,7 @@ main() {
   assert_wayland
   systemctl --user --version >/dev/null 2>&1 || die "systemctl --user is not available in this session."
   ensure_wl_copy
+  ensure_ffmpeg
   ensure_notify_send
   ensure_appindicator_runtime
   ensure_libxdo3

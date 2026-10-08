@@ -6,7 +6,7 @@ use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
 use glossa_app::{ports::TrayPort, AppActor, AppDependencies};
-use glossa_audio::{CpalAudioCapture, CuePlayerBackend, WavSilenceTrimmer};
+use glossa_audio::{CpalAudioCapture, CuePlayerBackend, FfmpegAudioEncoder, WavSilenceTrimmer};
 use glossa_core::{AppConfig, LogLevel};
 use glossa_platform_linux::{
     clipboard::WlCopyClipboard, paste::DotoolPasteBackend, secret, temp::XdgTempStore,
@@ -66,6 +66,7 @@ pub fn build_actor(
     let deps = AppDependencies {
         audio_capture: Arc::new(CpalAudioCapture::new()),
         trimmer: Arc::new(WavSilenceTrimmer::new(config.audio.trim_threshold)),
+        encoder: Arc::new(FfmpegAudioEncoder),
         cue_player: Arc::new(CuePlayerBackend::from_config(
             config.audio.enabled,
             config.ui.start_sound.clone(),

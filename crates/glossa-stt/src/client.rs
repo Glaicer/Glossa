@@ -10,7 +10,7 @@ use glossa_app::{
     ports::{ApiKeyProvider, SttClient},
     AppError,
 };
-use glossa_core::{CapturedAudio, ProviderConfig, ProviderKind};
+use glossa_core::{AudioFormat, CapturedAudio, ProviderConfig, ProviderKind};
 
 use crate::dto::TranscriptionResponse;
 
@@ -59,11 +59,11 @@ impl SttClient for HttpSttClient {
             .await
             .map_err(|error| AppError::io("failed to read captured audio", error))?;
         let filename = audio.path.file_name().unwrap_or("capture.wav").to_string();
-        let mime = match audio.path.extension() {
-            Some("wav") => "audio/wav",
-            Some("flac") => "audio/flac",
-            _ => "application/octet-stream",
-        };
+        let mime = audio
+            .path
+            .extension()
+            .and_then(AudioFormat::from_extension)
+            .map_or("application/octet-stream", AudioFormat::mime_type);
         let file_part = Part::bytes(bytes)
             .file_name(filename)
             .mime_str(mime)

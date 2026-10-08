@@ -135,8 +135,17 @@ Glossa depends on:
 
 - `wl-copy` and `wl-paste` from `wl-clipboard`
 - `dotool`
+- `ffmpeg` for MP3, M4A, FLAC, OGG, and AAC encoding (WAV does not require it)
 
-The installer checks for both and installs them automatically.
+The installer checks for these and installs them automatically.
+
+Choose the upload format in **Settings → Audio → Format** or set `audio.format` in `config.toml`
+to `"wav"` (default), `"mp3"`, `"m4a"`, `"flac"`, `"ogg"`, or `"aac"`. Capture and silence trimming
+always use WAV; conversion happens before upload. M4A uses AAC, OGG uses Vorbis, and AAC uses
+ADTS. Your transcription provider must accept the selected format; in particular, standalone
+AAC is not accepted by every provider. Existing installations using non-WAV formats need FFmpeg
+installed separately. Encoder tests also require FFmpeg with `libmp3lame`, `aac`, `flac`, and
+`libvorbis` encoders.
 
 ## Manual Installation
 
@@ -159,7 +168,7 @@ tar -xzf glossa-linux-x86_64.tar.gz
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y wl-clipboard libnotify-bin libxdo3
+sudo apt-get install -y wl-clipboard libnotify-bin libxdo3 ffmpeg
 ```
 
 5. Install the bundled `dotool` payload and udev rule:

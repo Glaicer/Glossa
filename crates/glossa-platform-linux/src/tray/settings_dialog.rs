@@ -4,6 +4,7 @@ use gtk::{
 };
 
 use glossa_app::AppError;
+use glossa_core::AudioFormat;
 
 use super::settings::{
     input_backend_id, input_mode_id, latency_mode_id, parse_input_backend, parse_input_mode,
@@ -28,6 +29,8 @@ const PROVIDER_API_KEY_TOOLTIP: &str =
 const PASTE_MODE_TOOLTIP: &str = "Selects which keyboard shortcut dotool should emulate for paste.";
 const APPEND_SPACE_TOOLTIP: &str =
     "Appends one trailing space to the pasted transcription for continuous dictation.";
+const AUDIO_FORMAT_TOOLTIP: &str =
+    "Selects the audio upload format. Non-WAV formats require FFmpeg. The provider must accept the selected format.";
 const LATENCY_MODE_TOOLTIP: &str =
     "Selects idle microphone stream policy. Options: off, balanced, or instant.";
 const KEEPALIVE_AFTER_STOP_SECONDS_TOOLTIP: &str =
@@ -169,6 +172,25 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
         KEEPALIVE_AFTER_STOP_SECONDS_TOOLTIP,
         &keepalive_after_stop_seconds,
     );
+    let audio_format = create_combo(
+        &[
+            ("wav", "wav"),
+            ("mp3", "mp3"),
+            ("m4a", "m4a"),
+            ("flac", "flac"),
+            ("ogg", "ogg"),
+            ("aac", "aac"),
+        ],
+        current.audio_format.extension(),
+        AUDIO_FORMAT_TOOLTIP,
+    );
+    attach_row(
+        &audio_grid,
+        2,
+        "Format",
+        AUDIO_FORMAT_TOOLTIP,
+        &audio_format,
+    );
     container.pack_start(&wrap_section("Audio", &audio_grid), false, false, 0);
 
     let paste_grid = create_section_grid();
@@ -234,6 +256,11 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
                     paste_mode: parse_paste_mode(&selected_id(&paste_mode, "paste mode")?)
                         .ok_or_else(|| AppError::message("paste mode selection is invalid"))?,
                     append_space: append_space.is_active(),
+                    audio_format: AudioFormat::from_extension(&selected_id(
+                        &audio_format,
+                        "audio format",
+                    )?)
+                    .ok_or_else(|| AppError::message("audio format selection is invalid"))?,
                     latency_mode: parse_latency_mode(&selected_id(&latency_mode, "latency mode")?)
                         .ok_or_else(|| AppError::message("latency mode selection is invalid"))?,
                     keepalive_after_stop_seconds: parse_keepalive_seconds(

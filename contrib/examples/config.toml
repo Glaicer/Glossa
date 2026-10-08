@@ -35,7 +35,7 @@ api_key = ""
 enabled = true
 # Sets the working directory for temporary audio files; options: "auto" or an absolute directory path.
 work_dir = "auto"
-# Selects the recorded audio container format; options: "wav", "flac".
+# Selects the audio upload format; options: "wav", "mp3", "m4a", "flac", "ogg", "aac". Non-WAV formats require FFmpeg and provider support.
 format = "wav"
 # Sets the recording sample rate in Hz; options: positive integer values, typically 16000 for the MVP.
 sample_rate_hz = 16000

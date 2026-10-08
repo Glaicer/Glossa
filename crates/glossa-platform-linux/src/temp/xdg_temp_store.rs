@@ -198,4 +198,41 @@ mod tests {
         assert!(!path.as_std_path().exists());
         std_fs::remove_dir_all(store.base_dir()).expect("test temp dir should be removed");
     }
+
+    #[tokio::test]
+    async fn cleanup_session_should_delete_wav_and_encoded_files() {
+        let store = test_store(false);
+        let session_id = SessionId::new();
+        let mut paths = Vec::new();
+        for format in [
+            AudioFormat::Wav,
+            AudioFormat::Mp3,
+            AudioFormat::M4a,
+            AudioFormat::Flac,
+            AudioFormat::Ogg,
+            AudioFormat::Aac,
+        ] {
+            let path = store
+                .create_recording_path(session_id, format)
+                .await
+                .expect("create path");
+            fs::write(&path, b"audio").await.expect("write audio");
+            paths.push(path);
+        }
+        let trimmed = store
+            .recording_path(session_id, AudioFormat::Wav)
+            .with_extension("trimmed.mp3");
+        fs::write(&trimmed, b"audio")
+            .await
+            .expect("write trimmed audio");
+        paths.push(trimmed);
+
+        store
+            .cleanup_session(session_id)
+            .await
+            .expect("cleanup session");
+
+        assert!(paths.iter().all(|path| !path.exists()));
+        std_fs::remove_dir_all(store.base_dir()).expect("remove test directory");
+    }
 }

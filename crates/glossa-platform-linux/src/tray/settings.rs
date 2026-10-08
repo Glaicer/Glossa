@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use glossa_app::AppError;
 use glossa_core::{
-    AppConfig, InputBackend, InputMode, LatencyMode, PasteMode, ProviderKind, UiTheme,
+    AppConfig, AudioFormat, InputBackend, InputMode, LatencyMode, PasteMode, ProviderKind, UiTheme,
 };
 
 use crate::secret::{self, LLM_SLOT, PROVIDER_SLOT};
@@ -22,6 +22,7 @@ pub(super) struct SettingsValues {
     pub(super) llm_api_key: String,
     pub(super) paste_mode: PasteMode,
     pub(super) append_space: bool,
+    pub(super) audio_format: AudioFormat,
     pub(super) latency_mode: LatencyMode,
     pub(super) keepalive_after_stop_seconds: u64,
     pub(super) ui_theme: UiTheme,
@@ -43,6 +44,7 @@ impl SettingsValues {
             llm_api_key: String::from(config.llm.api_key.clone()),
             paste_mode: config.paste.mode,
             append_space: config.paste.append_space,
+            audio_format: config.audio.format,
             latency_mode: config.audio.latency_mode,
             keepalive_after_stop_seconds: config.audio.keepalive_after_stop_seconds,
             ui_theme: config.ui.theme,
@@ -347,6 +349,7 @@ fn build_updates(settings: &SettingsValues) -> Vec<SettingUpdate> {
         SettingUpdate::new("LLM", "base_url", quoted(&settings.llm_base_url)),
         SettingUpdate::new("LLM", "model", quoted(&settings.llm_model)),
         SettingUpdate::new("LLM", "api_key", quoted(&settings.llm_api_key)),
+        SettingUpdate::new("audio", "format", quoted(settings.audio_format.extension())),
         SettingUpdate::new(
             "audio",
             "latency_mode",
@@ -576,6 +579,7 @@ api_key = ""
             llm_api_key: "env:LLM_KEY".into(),
             paste_mode: PasteMode::ShiftInsert,
             append_space: true,
+            audio_format: glossa_core::AudioFormat::Wav,
             latency_mode: LatencyMode::Instant,
             keepalive_after_stop_seconds: 30,
             ui_theme: UiTheme::Light,
@@ -827,6 +831,26 @@ model = "custom-llm"
 api_key = "env:LLM_KEY"
 "#
         ));
+    }
+
+    #[test]
+    fn audio_format_should_round_trip_settings() {
+        for format in [
+            glossa_core::AudioFormat::Wav,
+            glossa_core::AudioFormat::Mp3,
+            glossa_core::AudioFormat::M4a,
+            glossa_core::AudioFormat::Flac,
+            glossa_core::AudioFormat::Ogg,
+            glossa_core::AudioFormat::Aac,
+        ] {
+            let mut settings = updated_settings();
+            settings.audio_format = format;
+            let updated = apply_settings_to_config(&valid_config_source(), &settings)
+                .expect("audio format setting should save");
+            let config = glossa_core::AppConfig::from_toml_str(&updated).expect("parse config");
+            assert_eq!(config.audio.format, format);
+            assert_eq!(SettingsValues::from_config(&config).audio_format, format);
+        }
     }
 
     #[test]

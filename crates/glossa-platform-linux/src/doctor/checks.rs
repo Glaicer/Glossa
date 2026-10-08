@@ -15,7 +15,7 @@ pub struct Doctor;
 
 impl Doctor {
     pub async fn run(config: &AppConfig) -> Result<DoctorReport, AppError> {
-        let findings = vec![
+        let mut findings = vec![
             check_wayland(),
             check_gnome(),
             check_session_bus(),
@@ -29,6 +29,9 @@ impl Doctor {
             check_config(config),
             check_api_key(config),
         ];
+        if config.audio.format != glossa_core::AudioFormat::Wav {
+            findings.push(check_binary("ffmpeg"));
+        }
 
         Ok(DoctorReport { findings })
     }
@@ -222,6 +225,22 @@ mod tests {
                 .any(|finding| finding.name == "wl-paste"),
             "doctor should check the clipboard read command"
         );
+    }
+
+    #[tokio::test]
+    async fn doctor_should_require_ffmpeg_only_for_non_wav_formats() {
+        let mut config = AppConfig::default();
+        let report = Doctor::run(&config).await.expect("doctor report");
+        assert!(!report
+            .findings
+            .iter()
+            .any(|finding| finding.name == "ffmpeg"));
+        config.audio.format = glossa_core::AudioFormat::Mp3;
+        let report = Doctor::run(&config).await.expect("doctor report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.name == "ffmpeg"));
     }
 
     #[tokio::test]

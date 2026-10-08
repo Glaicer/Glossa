@@ -1,5 +1,6 @@
 mod api_key;
 mod audio_capture;
+mod audio_encoder;
 mod clipboard;
 mod command_source;
 mod cue_player;
@@ -12,6 +13,7 @@ mod tray;
 
 pub use self::api_key::{ApiKeyProvider, StaticApiKey};
 pub use self::audio_capture::{ActiveRecording, AudioCapture};
+pub use self::audio_encoder::AudioEncoder;
 pub use self::clipboard::{ClipboardSnapshot, ClipboardWriter};
 pub use self::command_source::CommandSource;
 pub use self::cue_player::CuePlayer;

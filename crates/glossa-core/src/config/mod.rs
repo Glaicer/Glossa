@@ -367,17 +367,32 @@ mod tests {
     }
 
     #[test]
-    fn config_should_reject_flac_until_supported() {
-        let config = AppConfig {
-            audio: AudioConfig {
-                format: AudioFormat::Flac,
-                ..AudioConfig::default()
-            },
-            ..AppConfig::default()
-        };
+    fn config_should_accept_supported_audio_formats() {
+        for format in [
+            AudioFormat::Wav,
+            AudioFormat::Mp3,
+            AudioFormat::M4a,
+            AudioFormat::Flac,
+            AudioFormat::Ogg,
+            AudioFormat::Aac,
+        ] {
+            let config = AppConfig {
+                audio: AudioConfig {
+                    format,
+                    ..AudioConfig::default()
+                },
+                ..AppConfig::default()
+            };
 
-        let error = config.validate().expect_err("validation should fail");
-        assert!(error.to_string().contains("flac"));
+            config.validate().expect("audio format should be supported");
+            let source = toml::to_string(&config).expect("serialize config");
+            let parsed = AppConfig::from_toml_str(&source).expect("parse config");
+            assert_eq!(parsed.audio.format, format);
+            assert_eq!(
+                AudioFormat::from_extension(format.extension()),
+                Some(format)
+            );
+        }
     }
 
     #[test]
