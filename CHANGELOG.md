@@ -5,6 +5,23 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-11
+
+### Added
+
+- A recording indicator: a dark pill at the bottom centre of the screen with a microphone glyph and a waveform that follows your live microphone level while recording. It runs in a hidden helper process that owns its own GTK event loop and uses the XWayland backend, so the daemon, the tray, and the desktop session stay on Wayland. No GNOME Shell extension is required.
+
+### Changed
+
+- The recording indicator is optional and best-effort. `ui.overlay = false` disables it, and display initialization failure, a missing display, or a crashing helper only log a warning: recording, transcription, clipboard writing, and paste are unaffected. In a non-Wayland session the daemon now explains why the indicator stays disabled instead of disabling it silently.
+- The recording indicator no longer needs the `libgtk-layer-shell` runtime library, and the installer no longer installs it. GTK/AppIndicator requirements for the tray remain unchanged.
+- Updates now preserve unrelated files in the Glossa asset directories instead of clearing them.
+- Uninstall removes only Glossa-owned files (the binary, `VERSION`, the bundled `update.sh`, and the known tray/sound assets) and leaves unrelated files in those directories in place.
+
+### Notes
+
+- The indicator is verified for ordinary windows on Fedora GNOME Wayland with the current monitor arrangement and scale. Fullscreen, the Overview, workspace transitions, monitor changes, other scaling, and Ubuntu runtime behaviour are not verified. Using XWayland for the indicator does not add X11 desktop-session support.
+
 ## [1.6.0] - 2026-10-09
 
 ### Added
@@ -184,7 +201,8 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 [1.5.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.1
-[1.4.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.0
+[1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
+[1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
 [1.3.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.3.0
 [1.2.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.2.2
 [1.2.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.2.1
