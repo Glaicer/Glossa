@@ -122,19 +122,12 @@ extract_glossa_bundle() {
   tar -xzf "${tarball_path}" -C "${glossa_bundle_dir}"
 }
 
-clear_directory_files() {
-  local directory="$1"
-
-  mkdir -p "${directory}"
-  find "${directory}" -mindepth 1 -maxdepth 1 -type f -delete
-}
-
 install_directory_files() {
   local source_dir="$1"
   local destination_dir="$2"
   local files=()
 
-  clear_directory_files "${destination_dir}"
+  mkdir -p "${destination_dir}"
 
   shopt -s nullglob
   files=("${source_dir}/"*)
@@ -192,7 +185,6 @@ parse_args() {
 }
 
 main() {
-  require_command find
   require_command install
   require_command mktemp
   require_command sha256sum

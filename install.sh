@@ -197,7 +197,7 @@ confirm_continue() {
   log
   log "This script will:"
   log "- verify that you are running GNOME on Wayland"
-  log "- install runtime dependencies such as wl-clipboard, libnotify, AppIndicator, libxdo, gtk-layer-shell, and dotool if missing"
+  log "- install runtime dependencies such as wl-clipboard, libnotify, AppIndicator, libxdo, and dotool if missing"
   log "- download the latest Glossa release bundle from GitHub"
   log "- create ~/.config/glossa/config.toml and systemd user services"
   log
@@ -367,18 +367,6 @@ ensure_libxdo3() {
 
   ldconfig -p 2>/dev/null | grep -q 'libxdo.so.3' \
     || die "libxdo3 is still unavailable after installing it."
-}
-
-ensure_layer_shell_runtime() {
-  if ldconfig -p 2>/dev/null | grep -q 'libgtk-layer-shell.so.0'; then
-    return 0
-  fi
-
-  log "gtk-layer-shell runtime library was not found. Installing it for the recording overlay."
-  install_system_packages "$(package_name_for_distro libgtk-layer-shell0 gtk-layer-shell)"
-
-  ldconfig -p 2>/dev/null | grep -q 'libgtk-layer-shell.so.0' \
-    || warn "gtk-layer-shell is still unavailable; the recording overlay stays disabled."
 }
 
 dotool_bundle_ready() {
@@ -932,7 +920,6 @@ main() {
   ensure_notify_send
   ensure_appindicator_runtime
   ensure_libxdo3
-  ensure_layer_shell_runtime
   download_and_install_glossa
   maybe_generate_config
   "${glossa_path}" --config "${CONFIG_PATH}" migrate-secrets \

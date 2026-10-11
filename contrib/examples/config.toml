@@ -69,7 +69,8 @@ type_command = "dotoolc"
 [ui]
 # Enables best-effort tray integration; options: true, false.
 tray = true
-# Shows a recording indicator overlay at the bottom of the screen; options: true, false.
+# Optional GTK3/XWayland recording indicator in a GNOME Wayland session; options: true, false.
+# Display/helper failures disable only the indicator; dictation continues.
 overlay = true
 # Selects which tray icon set to use; options: "light", "dark".
 theme = "dark"

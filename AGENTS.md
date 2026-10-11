@@ -200,7 +200,7 @@ One shared `HttpSttClient` implementing `SttClient`, with thin strategy construc
 | `portal/shortcut_source.rs` | `PortalShortcutSource` implements `CommandSource` via `ashpd` GlobalShortcuts |
 | `portal/mapping.rs` | Pure `map_portal_signal_to_command(mode, signal) → Option<AppCommand>` |
 | `tray/tray_port.rs` | `BestEffortTrayPort` — GTK tray icon on a dedicated thread |
-| `overlay/overlay_port.rs` | `BestEffortOverlayPort` — layer-shell recording pill (no focus, click-through), own GTK thread |
+| `overlay/overlay_port.rs` | `BestEffortOverlayPort` — supervised same-binary XWayland recording pill (no focus, click-through) |
 | `clipboard/wl_copy.rs` | `WlCopyClipboard` implements `ClipboardWriter` |
 | `paste/dotool.rs` | `DotoolPasteBackend` implements `PasteBackend` |
 | `ipc/server.rs` | `IpcServer` — `tokio::net::UnixListener` JSON protocol |
@@ -264,11 +264,11 @@ All platform-specific code lives behind traits in `glossa-app::ports`. The app l
 | CPAL callback thread(s) | Deliver PCM samples into a bounded channel |
 | WAV writer thread | Reads PCM from channel, writes to disk via `hound` |
 
-The tray **must** live on its own thread because GTK requires owning the event loop.
+The tray **must** live on its own thread because GTK requires owning the event loop. The recording pill runs GTK in the hidden `glossa overlay-helper` subprocess; only that child receives `GDK_BACKEND=x11`. Microphone levels cross a private Unix socket; the child cannot read the daemon's atomic meter. Hide/drop kills and reaps the helper.
 
 ### Daemon Restart Loop
 
-The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit::Restart` (e.g., after tray shortcut change), it reloads config, rebuilds the actor, and re-enters the loop. The tray (`BestEffortTrayPort`) is created once and survives restarts — only its command sender is rebound.
+The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit::Restart` (e.g., after tray shortcut change), it reloads config, rebuilds the actor, and re-enters the loop. The tray (`BestEffortTrayPort`) is created once and survives restarts — only its command sender is rebound. The overlay is rebuilt inside the restart loop so changed `ui.overlay` settings apply.
 
 ---
 
@@ -407,10 +407,10 @@ glossa update → glossa-bin::cmd::update → glossa-platform-linux::updater::ru
 | `dotool` | Keyboard paste emulation | `dotool` |
 | `dconf` | GNOME settings (shortcut rebind) | `dconf-cli` |
 | `ffmpeg` | Encode non-WAV uploads | `ffmpeg` (Ubuntu), `ffmpeg-free` (Fedora) |
-| `libgtk-layer-shell` | Recording overlay layer surface | `libgtk-layer-shell0` (Ubuntu), `gtk-layer-shell` (Fedora) |
+| XWayland | Optional recording indicator in the GNOME Wayland session | Existing session X11 display/authentication; no overlay Shell extension |
 
 The tray requires the **AppIndicator and KStatusNotifierItem Support** GNOME Shell extension. If absent, the daemon continues without tray — it does not crash.
-The recording overlay requires the `libgtk-layer-shell` runtime library; if it is missing the overlay stays disabled and the daemon logs a warning.
+The recording overlay uses GTK3/XWayland through the same shipped `glossa` executable. Display initialization or helper failure disables only the indicator and logs a warning; dictation continues. Keep GTK runtime requirements for the tray and other UI. Ordinary windows on Fedora GNOME Wayland with the current monitor arrangement and scale are verified; Ubuntu runtime, fullscreen, Overview, workspace transitions, hotplug, and other scaling remain unverified. XWayland use does not add X11 desktop support.
 Installer and updater scripts additionally rely on standard user-session tooling such as `systemctl`, `tar`, `sha256sum`, and `curl`/`wget`.
 
 ---

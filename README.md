@@ -111,7 +111,7 @@ Update an existing installation in any of these ways:
 - `glossa update`
 - tray menu: `Update`
 
-The updater downloads the latest stable release, verifies its checksum, replaces the Glossa binary and bundled assets, and restarts `glossa.service`.
+The updater downloads the latest stable release, verifies its checksum, replaces the Glossa binary and bundled assets, and restarts `glossa.service`. It preserves configuration and unrelated files in the asset directories. The recording indicator is included in the same `glossa` executable; no separate helper installation or overlay Shell extension is needed.
 
 ## Uninstalling
 
@@ -124,7 +124,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/Glaicer/glossa/main/uninstall
 The script will:
 
 - stop and remove the `glossa` and `dotool` user services
-- remove the Glossa binary and bundled assets
+- remove the Glossa binary (including the indicator helper), bundled updater, VERSION, and known assets; keep unrelated files in asset directories
 - remove the generated Glossa config, or restore the most recent config backup if one exists
 - keep a non-installer-managed `~/.config/glossa/config.toml` in place
 - optionally remove `wl-clipboard` and `dotool`
@@ -138,6 +138,10 @@ Glossa depends on:
 - `ffmpeg` for MP3, M4A, FLAC, OGG, and AAC encoding (WAV does not require it)
 
 The installer checks for these and installs them automatically.
+
+The optional recording indicator requires a usable XWayland display in the GNOME Wayland session and GTK3. Only its same-binary helper uses X11; the daemon and tray keep their own backend. If display initialization or the helper fails, a warning explains the indicator failure and dictation continues. Set `ui.overlay = false` to disable it; omitted settings retain the default enabled behaviour, and existing configuration is preserved. XWayland is not installed automatically by the installer.
+
+The indicator requires no additional GNOME Shell extension. The tray still needs the **AppIndicator and KStatusNotifierItem Support** extension and its GTK/AppIndicator runtime libraries. Ordinary-window indicator behaviour is verified on Fedora GNOME Wayland with the current monitor arrangement and scale. Ubuntu runtime, fullscreen, Overview, workspace transitions, monitor hotplug, and other scaling remain unverified. Using XWayland for the indicator does not add X11 desktop-session support.
 
 Choose the upload format in **Settings → Audio → Format** or set `audio.format` in `config.toml`
 to `"wav"` (default), `"mp3"`, `"m4a"`, `"flac"`, `"ogg"`, or `"aac"`. Capture and silence trimming
@@ -164,7 +168,7 @@ sha256sum -c --ignore-missing sha256sums.txt
 tar -xzf glossa-linux-x86_64.tar.gz
 ```
 
-4. Install the runtime dependencies that `install.sh` normally checks for:
+4. Install the runtime dependencies that `install.sh` normally checks for. Keep the desktop's GTK3/AppIndicator libraries available; the indicator also needs a usable session XWayland display:
 
 ```bash
 sudo apt-get update

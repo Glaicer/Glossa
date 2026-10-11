@@ -18,7 +18,6 @@ version = "1.6.0"
 anyhow = "=1.0.95"
 async-trait = "=0.1.83"
 gtk = "=0.18.1"
-gtk-layer-shell = { version = "=0.8.2", features = ["v0_6"] }
 keyring = { version = "=3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
 camino = { version = "=1.1.9", features = ["serde1"] }
 clap = { version = "=4.5.21", features = ["derive"] }
