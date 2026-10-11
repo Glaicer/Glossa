@@ -135,7 +135,7 @@ update_preserves_user_files() {
 bundle_and_install() {
   prepare_bundle
   (cd "${TEST_RELEASE}" && sha256sum -c sha256sums.txt)
-  tar -tzf "${TEST_RELEASE}/glossa-linux-x86_64.tar.gz" | sort > "${fixture}/members"
+  tar -tzf "${TEST_RELEASE}/glossa-linux-x86_64.tar.gz" | LC_ALL=C sort > "${fixture}/members"
   cat > "${fixture}/expected" <<'MEMBERS'
 VERSION
 assets/
