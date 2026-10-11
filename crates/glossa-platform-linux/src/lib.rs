@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod dialog;
 pub mod doctor;
 pub mod ipc;
+pub mod overlay;
 pub mod paste;
 pub mod portal;
 pub mod secret;

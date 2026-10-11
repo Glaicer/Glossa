@@ -69,6 +69,8 @@ type_command = "dotoolc"
 [ui]
 # Enables best-effort tray integration; options: true, false.
 tray = true
+# Shows a recording indicator overlay at the bottom of the screen; options: true, false.
+overlay = true
 # Selects which tray icon set to use; options: "light", "dark".
 theme = "dark"
 # Sets the tray icon shown while idle; options: absolute path to an icon file.

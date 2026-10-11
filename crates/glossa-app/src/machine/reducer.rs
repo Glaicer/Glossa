@@ -45,6 +45,7 @@ pub fn reduce(state: &AppState, command: &AppCommand) -> Result<Decision, CoreEr
                 next_state: AppState::Recording(RecordingState { session_id }),
                 actions: vec![
                     Action::SetTrayRecording,
+                    Action::ShowOverlay,
                     Action::StartRecording { session_id },
                     Action::PlayStartCue,
                 ],
@@ -60,6 +61,7 @@ pub fn reduce(state: &AppState, command: &AppCommand) -> Result<Decision, CoreEr
             next_state: AppState::Idle,
             actions: vec![
                 Action::SetTrayIdle,
+                Action::HideOverlay,
                 Action::PlayStopCue,
                 Action::AbortRecording {
                     session_id: *session_id,
@@ -74,6 +76,7 @@ pub fn reduce(state: &AppState, command: &AppCommand) -> Result<Decision, CoreEr
                 session_id: *session_id,
             }),
             actions: vec![
+                Action::HideOverlay,
                 Action::PlayStopCue,
                 Action::SetTrayProcessing,
                 Action::StopRecording {
@@ -149,7 +152,7 @@ mod tests {
         .expect("reducer should succeed");
 
         assert!(matches!(decision.next_state, AppState::Recording(_)));
-        assert_eq!(decision.actions.len(), 3);
+        assert!(decision.actions.contains(&Action::ShowOverlay));
     }
 
     #[test]
@@ -178,10 +181,12 @@ mod tests {
         .expect("reducer should succeed");
 
         assert_eq!(decision.next_state, AppState::Idle);
+        assert_eq!(decision.next_state, AppState::Idle);
         assert_eq!(
             decision.actions,
             vec![
                 Action::SetTrayIdle,
+                Action::HideOverlay,
                 Action::PlayStopCue,
                 Action::AbortRecording { session_id },
             ]

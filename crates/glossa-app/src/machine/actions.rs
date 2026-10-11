@@ -9,6 +9,8 @@ pub enum Action {
     SetTrayIdle,
     SetTrayRecording,
     SetTrayProcessing,
+    ShowOverlay,
+    HideOverlay,
     PlayStartCue,
     PlayStopCue,
     ToggleInputStream,

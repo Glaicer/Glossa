@@ -155,6 +155,7 @@ The heart of the application. Defines **port traits** and the **pure reducer**.
 - `ClipboardWriter` — put text into the clipboard
 - `PasteBackend` — emulate a keyboard paste shortcut
 - `TrayPort` / `NullTrayPort` — update tray icon state
+- `OverlayPort` / `NullOverlayPort` — show/hide the recording indicator overlay
 - `TempStore` — manage temp file paths and cleanup
 - `CommandSource` — produce `AppCommand` values (portal, IPC)
 
@@ -199,6 +200,7 @@ One shared `HttpSttClient` implementing `SttClient`, with thin strategy construc
 | `portal/shortcut_source.rs` | `PortalShortcutSource` implements `CommandSource` via `ashpd` GlobalShortcuts |
 | `portal/mapping.rs` | Pure `map_portal_signal_to_command(mode, signal) → Option<AppCommand>` |
 | `tray/tray_port.rs` | `BestEffortTrayPort` — GTK tray icon on a dedicated thread |
+| `overlay/overlay_port.rs` | `BestEffortOverlayPort` — layer-shell recording pill (no focus, click-through), own GTK thread |
 | `clipboard/wl_copy.rs` | `WlCopyClipboard` implements `ClipboardWriter` |
 | `paste/dotool.rs` | `DotoolPasteBackend` implements `PasteBackend` |
 | `ipc/server.rs` | `IpcServer` — `tokio::net::UnixListener` JSON protocol |
@@ -405,8 +407,10 @@ glossa update → glossa-bin::cmd::update → glossa-platform-linux::updater::ru
 | `dotool` | Keyboard paste emulation | `dotool` |
 | `dconf` | GNOME settings (shortcut rebind) | `dconf-cli` |
 | `ffmpeg` | Encode non-WAV uploads | `ffmpeg` (Ubuntu), `ffmpeg-free` (Fedora) |
+| `libgtk-layer-shell` | Recording overlay layer surface | `libgtk-layer-shell0` (Ubuntu), `gtk-layer-shell` (Fedora) |
 
 The tray requires the **AppIndicator and KStatusNotifierItem Support** GNOME Shell extension. If absent, the daemon continues without tray — it does not crash.
+The recording overlay requires the `libgtk-layer-shell` runtime library; if it is missing the overlay stays disabled and the daemon logs a warning.
 Installer and updater scripts additionally rely on standard user-session tooling such as `systemctl`, `tar`, `sha256sum`, and `curl`/`wget`.
 
 ---
@@ -452,3 +456,17 @@ ExecStart=%h/.cargo/bin/glossa --config %h/.config/glossa/config.toml daemon
 - GUI settings window
 - System-wide daemon
 - Multiple microphones with UI switching
+
+## Agent skills
+
+### Issue tracker
+
+Track work as local Markdown tickets under `.scratch/`. Before reading or publishing tickets, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five triage roles. Before assigning ticket statuses, read `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single shared domain context. Before exploring domain terminology or architectural decisions, read `docs/agents/domain.md`.
