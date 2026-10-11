@@ -582,6 +582,7 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingLifecycle {
+        fail_start: bool,
         stop_calls: Mutex<Vec<SessionId>>,
         abort_calls: Mutex<Vec<SessionId>>,
         idle_on_calls: Mutex<usize>,
@@ -681,6 +682,9 @@ mod tests {
             path: &Utf8Path,
         ) -> Result<Box<dyn ActiveRecording>, AppError> {
             let _ = (spec, path);
+            if self.lifecycle.fail_start {
+                return Err(AppError::message("capture unavailable"));
+            }
             Ok(Box::new(TrackingRecording {
                 session_id,
                 lifecycle: Arc::clone(&self.lifecycle),
@@ -1172,6 +1176,56 @@ mod tests {
             *overlay.events.lock().expect("mutex should not be poisoned"),
             vec!["show", "hide"]
         );
+    }
+
+    #[tokio::test]
+    async fn overlay_should_hide_on_capture_failure_cancel_restart_and_shutdown() {
+        for origin in [CommandOrigin::PortalShortcut, CommandOrigin::CliControl] {
+            for (fail_start, command) in [
+                (true, AppCommand::Shutdown { origin }),
+                (false, AppCommand::CancelRecording { origin }),
+                (false, AppCommand::Restart { origin }),
+                (false, AppCommand::Shutdown { origin }),
+            ] {
+                let overlay = Arc::new(RecordingOverlay::default());
+                let deps = AppDependencies {
+                    audio_capture: Arc::new(TrackingAudioCapture {
+                        lifecycle: Arc::new(RecordingLifecycle {
+                            fail_start,
+                            ..Default::default()
+                        }),
+                    }),
+                    trimmer: Arc::new(FakeTrimmer),
+                    encoder: Arc::new(FakeTrimmer),
+                    cue_player: Arc::new(FakeCuePlayer),
+                    stt_client: Arc::new(FakeSttClient),
+                    text_enhancer: Arc::new(NoopTextEnhancer),
+                    clipboard: Arc::new(FakeClipboard),
+                    paste: Arc::new(FakePaste),
+                    tray: Arc::new(crate::ports::NullTrayPort),
+                    overlay: overlay.clone(),
+                    temp_store: Arc::new(FakeTempStore),
+                };
+                let (actor, handle) = AppActor::new(AppConfig::default(), deps);
+                handle
+                    .send(AppCommand::ToggleRecording { origin })
+                    .expect("start");
+                let hides_before_shutdown =
+                    fail_start || matches!(command, AppCommand::CancelRecording { .. });
+                handle.send(command).expect("end recording");
+                handle
+                    .send(AppCommand::Shutdown { origin })
+                    .expect("shutdown");
+                actor.run().await.expect("actor exit");
+                let events = overlay.events.lock().expect("overlay events");
+                let expected = if hides_before_shutdown {
+                    vec!["show", "hide", "hide"]
+                } else {
+                    vec!["show", "hide"]
+                };
+                assert_eq!(*events, expected);
+            }
+        }
     }
 
     #[tokio::test]

@@ -26,9 +26,9 @@ async fn run_inner(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()
     init_tracing(&config)?;
     info!(path = %config_path.display(), "starting glossa daemon");
     let tray = build_tray(&config_path, &config);
-    let overlay = build_overlay(&config);
 
     loop {
+        let overlay = build_overlay(&config);
         let socket_path = config
             .control
             .socket_path

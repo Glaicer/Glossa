@@ -4,12 +4,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gtk::cairo::{self, Context};
-use gtk::glib;
 use gtk::prelude::*;
+use gtk::{gdk, glib};
 use gtk::{DrawingArea, Window, WindowType};
-use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-
-use glossa_app::level::level_percent;
 
 const PILL_WIDTH: i32 = 320;
 const PILL_HEIGHT: i32 = 72;
@@ -34,16 +31,25 @@ const BAR_MULTIPLIERS: [f64; BAR_COUNT] =
 const LEVEL_ATTACK: f32 = 0.45;
 const LEVEL_DECAY: f32 = 0.10;
 
-/// Layer-shell recording indicator drawn as a dark pill with a white
+/// XWayland recording indicator drawn as a dark pill with a white
 /// microphone glyph and a live waveform.
 pub struct PillWindow {
     window: Window,
     level: Rc<Cell<f32>>,
+    target: Rc<Cell<f32>>,
 }
 
 impl PillWindow {
     pub fn new() -> Self {
         let window = Window::new(WindowType::Toplevel);
+        window.set_title("glossa-recording");
+        window.set_skip_taskbar_hint(true);
+        window.set_skip_pager_hint(true);
+        window.set_type_hint(gdk::WindowTypeHint::Dock);
+        window.set_keep_above(true);
+        window.set_accept_focus(false);
+        window.set_focus_on_map(false);
+        window.stick();
         window.set_decorated(false);
         window.set_resizable(false);
         window.set_app_paintable(true);
@@ -55,14 +61,6 @@ impl PillWindow {
                 .and_then(|screen| screen.rgba_visual())
                 .as_ref(),
         );
-
-        window.init_layer_shell();
-        window.set_layer(Layer::Overlay);
-        window.set_anchor(Edge::Bottom, true);
-        window.set_layer_shell_margin(Edge::Bottom, BOTTOM_MARGIN);
-        window.set_exclusive_zone(0);
-        window.set_keyboard_mode(KeyboardMode::None);
-        window.set_namespace("glossa-recording");
 
         let drawing_area = DrawingArea::new();
         drawing_area.set_size_request(PILL_WIDTH, PILL_HEIGHT);
@@ -79,10 +77,11 @@ impl PillWindow {
             glib::Propagation::Proceed
         });
 
+        let target = Rc::new(Cell::new(0.0_f32));
+        let tick_target = Rc::clone(&target);
         let tick_level = Rc::clone(&level);
         drawing_area.add_tick_callback(move |widget, _frame_clock| {
-            let target = f32::from(level_percent()) / 100.0;
-            tick_level.set(smooth_level(tick_level.get(), target));
+            tick_level.set(smooth_level(tick_level.get(), tick_target.get()));
             widget.queue_draw();
             glib::ControlFlow::Continue
         });
@@ -91,15 +90,41 @@ impl PillWindow {
         make_click_through(&window);
         window.set_visible(false);
 
-        Self { window, level }
+        Self {
+            window,
+            level,
+            target,
+        }
     }
 
     pub fn set_visible(&self, visible: bool) {
+        self.level.set(0.0);
+        self.target.set(0.0);
         if visible {
-            self.level.set(0.0);
+            self.window.show_all();
+            position_bottom_center(&self.window);
+        } else {
+            self.window.hide();
         }
-        self.window.set_visible(visible);
     }
+
+    pub fn set_level(&self, percent: u8) {
+        self.target.set(f32::from(percent.min(100)) / 100.0);
+    }
+}
+
+fn position_bottom_center(window: &Window) {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    let Some(monitor) = display.primary_monitor().or_else(|| display.monitor(0)) else {
+        return;
+    };
+    let area = monitor.geometry();
+    window.move_(
+        area.x() + (area.width() - PILL_WIDTH) / 2,
+        area.y() + area.height() - PILL_HEIGHT - BOTTOM_MARGIN,
+    );
 }
 
 fn make_click_through(window: &Window) {
@@ -107,6 +132,10 @@ fn make_click_through(window: &Window) {
 }
 
 fn draw_pill(context: &Context, level: f32, elapsed_secs: f64) {
+    context.set_operator(cairo::Operator::Source);
+    context.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+    context.paint().expect("clear pill");
+    context.set_operator(cairo::Operator::Over);
     context.set_source_rgb(BACKGROUND_RGB.0, BACKGROUND_RGB.1, BACKGROUND_RGB.2);
     rounded_rectangle(
         context,

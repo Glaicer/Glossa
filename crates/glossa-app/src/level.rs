@@ -7,7 +7,7 @@ static PEAK_PERCENT: AtomicU8 = AtomicU8::new(0);
 /// Records the peak absolute amplitude (0.0..=1.0) of one captured audio chunk.
 ///
 /// Process-global on purpose: capture happens on the audio thread and the
-/// overlay reads it from the GTK thread, and routing a meter through the
+/// overlay transport reads it from its supervisor thread, and routing a meter through the
 /// capture port trait would touch every implementation for one display value.
 pub fn record_peak(peak: f32) {
     PEAK_PERCENT.store(peak_to_percent(peak), Ordering::Relaxed);
