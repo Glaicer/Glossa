@@ -35,7 +35,29 @@ struct OverlayWorker {
 impl BestEffortOverlayPort {
     #[must_use]
     pub fn new(config: &AppConfig) -> Self {
-        let command = if config.ui.overlay && is_wayland_session() {
+        Self::with_session_values(
+            config,
+            env::var("XDG_SESSION_TYPE").ok().as_deref(),
+            env::var_os("WAYLAND_DISPLAY")
+                .and_then(|value| value.into_string().ok())
+                .as_deref(),
+        )
+    }
+
+    fn with_session_values(
+        config: &AppConfig,
+        session_type: Option<&str>,
+        wayland_display: Option<&str>,
+    ) -> Self {
+        let command = if !config.ui.overlay {
+            None
+        } else if !is_wayland_session_values(session_type, wayland_display) {
+            warn!(
+                "recording overlay requires a GNOME Wayland session; \
+                 the indicator stays disabled and dictation continues"
+            );
+            None
+        } else {
             match env::current_exe() {
                 Ok(path) => {
                     let mut command = Command::new(path);
@@ -47,8 +69,6 @@ impl BestEffortOverlayPort {
                     None
                 }
             }
-        } else {
-            None
         };
         Self::with_config_and_command(config, command)
     }
@@ -98,6 +118,8 @@ impl Drop for BestEffortOverlayPort {
 #[async_trait]
 impl OverlayPort for BestEffortOverlayPort {
     async fn show_recording(&self) -> Result<(), AppError> {
+        // The supervisor transports the process-global peak, so reset it here;
+        // otherwise the previous cycle's final level replays into a new recording.
         glossa_app::level::record_peak(0.0);
         self.send_command(OverlayCommand::Show).await;
         Ok(())
@@ -189,15 +211,6 @@ fn run_worker(
     }
 }
 
-fn is_wayland_session() -> bool {
-    is_wayland_session_values(
-        env::var("XDG_SESSION_TYPE").ok().as_deref(),
-        env::var_os("WAYLAND_DISPLAY")
-            .and_then(|value| value.into_string().ok())
-            .as_deref(),
-    )
-}
-
 fn is_wayland_session_values(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
     wayland_display.is_some_and(|value| !value.is_empty())
         || session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
@@ -259,6 +272,24 @@ mod tests {
         assert!(!std::path::Path::new(&format!("/proc/{second_pid}")).exists());
         std::fs::remove_file(path).expect("remove fixture");
         assert_eq!(std::env::var_os("GDK_BACKEND"), parent_backend);
+    }
+
+    #[tokio::test]
+    async fn non_wayland_session_should_not_start_a_helper() {
+        let _guard = METER_TEST_LOCK.lock().await;
+        let path = std::env::temp_dir().join(format!(
+            "glossa-overlay-non-wayland-{}.log",
+            std::process::id()
+        ));
+        let overlay = BestEffortOverlayPort::with_session_values(
+            &glossa_core::AppConfig::default(),
+            Some("x11"),
+            None,
+        );
+        overlay.show_recording().await.expect("non-Wayland show");
+        overlay.hide().await.expect("non-Wayland hide");
+        drop(overlay);
+        assert!(!path.exists(), "non-Wayland session started a helper");
     }
 
     #[tokio::test]
