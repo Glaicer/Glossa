@@ -5,11 +5,12 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.0] - 2026-10-11
+## [1.7.0] - 2026-10-12
 
 ### Added
 
 - A recording indicator: a dark pill at the bottom centre of the screen with a microphone glyph and a waveform that follows your live microphone level while recording. It runs in a hidden helper process that owns its own GTK event loop and uses the XWayland backend, so the daemon, the tray, and the desktop session stay on Wayland. No GNOME Shell extension is required.
+- A processing indicator: the same pill switches to a server glyph and independently pulsing dots while awaiting transcription and text enhancement. It hides before pasting, or when processing fails, recording is cancelled, or the daemon restarts or shuts down.
 
 ### Changed
 
@@ -197,12 +198,11 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
 [1.5.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.4.1
-[1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
-[1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
 [1.3.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.3.0
 [1.2.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.2.2
 [1.2.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.2.1
