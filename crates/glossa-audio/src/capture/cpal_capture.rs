@@ -689,11 +689,15 @@ fn send_converted<I>(
 ) where
     I: Iterator<Item = i16>,
 {
-    let chunk: Vec<i16> = samples.collect();
+    let mut peak = 0i16;
+    let chunk: Vec<i16> = samples
+        .inspect(|sample| peak = peak.max(sample.abs()))
+        .collect();
     let has_samples = !chunk.is_empty();
     if has_samples {
         first_input_notifier.notify();
     }
+    glossa_app::level::record_peak(f32::from(peak) / f32::from(i16::MAX));
     let _ = tx.send(chunk);
 }
 

@@ -209,16 +209,24 @@ remove_glossa_installation() {
   disable_and_remove_service "glossa.service" "${GLOSSA_SERVICE_PATH}"
 
   remove_file_if_exists "${INSTALLED_GLOSSA_PATH}"
+  remove_file_if_exists "${LOCAL_SHARE_DIR}/VERSION"
 
-  if [[ -d "${LOCAL_TRAY_DIR}" ]]; then
-    rm -rf "${LOCAL_TRAY_DIR}"
-    log "Removed ${LOCAL_TRAY_DIR}"
+  local updater_path="${LOCAL_BIN_DIR}/update.sh"
+  if [[ -f "${updater_path}" ]] \
+    && grep -Fq 'readonly GLOSSA_REPO="${GLOSSA_REPO:-Glaicer/glossa}"' "${updater_path}" \
+    && grep -Fq 'readonly UPDATER_ASSET_NAME="${UPDATER_ASSET_NAME:-glossa-update.sh}"' "${updater_path}"; then
+    remove_file_if_exists "${updater_path}"
   fi
 
-  if [[ -d "${LOCAL_SOUND_DIR}" ]]; then
-    rm -rf "${LOCAL_SOUND_DIR}"
-    log "Removed ${LOCAL_SOUND_DIR}"
-  fi
+  local name
+  for name in idle recording processing idle_dark recording_dark processing_dark; do
+    remove_file_if_exists "${LOCAL_TRAY_DIR}/${name}.png"
+  done
+  for name in start stop; do
+    remove_file_if_exists "${LOCAL_SOUND_DIR}/${name}.wav"
+  done
+  remove_dir_if_empty "${LOCAL_TRAY_DIR}"
+  remove_dir_if_empty "${LOCAL_SOUND_DIR}"
 
   restore_config_backup_if_available
 

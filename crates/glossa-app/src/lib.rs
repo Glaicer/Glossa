@@ -1,6 +1,7 @@
 //! Application state machine, orchestration traits, and daemon actor.
 
 pub mod error;
+pub mod level;
 pub mod machine;
 pub mod ports;
 pub mod services;

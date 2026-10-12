@@ -5,12 +5,12 @@ use anyhow::{anyhow, Context};
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
-use glossa_app::{ports::TrayPort, AppActor, AppDependencies};
+use glossa_app::{ports::OverlayPort, ports::TrayPort, AppActor, AppDependencies};
 use glossa_audio::{CpalAudioCapture, CuePlayerBackend, FfmpegAudioEncoder, WavSilenceTrimmer};
 use glossa_core::{AppConfig, LogLevel};
 use glossa_platform_linux::{
-    clipboard::WlCopyClipboard, paste::DotoolPasteBackend, secret, temp::XdgTempStore,
-    tray::BestEffortTrayPort,
+    clipboard::WlCopyClipboard, overlay::BestEffortOverlayPort, paste::DotoolPasteBackend, secret,
+    temp::XdgTempStore, tray::BestEffortTrayPort,
 };
 use glossa_stt::{build_client, build_text_enhancer};
 
@@ -48,15 +48,21 @@ pub fn init_tracing(config: &AppConfig) -> anyhow::Result<()> {
         .map_err(|error| anyhow!("failed to initialize tracing: {error}"))
 }
 
-/// Builds the app actor and its dependencies from a validated config.
+/// Builds the tray port shown in the system tray.
 pub fn build_tray(config_path: &Path, config: &AppConfig) -> Arc<BestEffortTrayPort> {
     Arc::new(BestEffortTrayPort::new(config_path.to_path_buf(), config))
+}
+
+/// Builds the recording overlay shown while dictation is active.
+pub fn build_overlay(config: &AppConfig) -> Arc<BestEffortOverlayPort> {
+    Arc::new(BestEffortOverlayPort::new(config))
 }
 
 /// Builds the app actor and its dependencies from a validated config.
 pub fn build_actor(
     config: AppConfig,
     tray: Arc<dyn TrayPort>,
+    overlay: Arc<dyn OverlayPort>,
 ) -> anyhow::Result<(AppActor, glossa_app::AppHandle)> {
     // Resolved lazily: touching Secret Service here blocks startup when the
     // desktop keyring is not unlocked yet.
@@ -77,6 +83,7 @@ pub fn build_actor(
         clipboard: Arc::new(WlCopyClipboard::new(config.paste.clipboard_command.clone())),
         paste: Arc::new(DotoolPasteBackend::new(config.paste.type_command.clone())),
         tray,
+        overlay,
         temp_store,
     };
     Ok(AppActor::new(config, deps))

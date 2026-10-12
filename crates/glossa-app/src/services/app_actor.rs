@@ -13,8 +13,8 @@ use glossa_core::{
 use crate::{
     machine::{reduce, Action},
     ports::{
-        ActiveRecording, AudioCapture, AudioEncoder, ClipboardWriter, CuePlayer, PasteBackend,
-        SilenceTrimmer, SttClient, TempStore, TextEnhancer, TrayPort, TrayState,
+        ActiveRecording, AudioCapture, AudioEncoder, ClipboardWriter, CuePlayer, OverlayPort,
+        PasteBackend, SilenceTrimmer, SttClient, TempStore, TextEnhancer, TrayPort, TrayState,
     },
     services::{
         command_router::AppHandle,
@@ -39,6 +39,7 @@ pub struct AppDependencies {
     pub clipboard: Arc<dyn ClipboardWriter>,
     pub paste: Arc<dyn PasteBackend>,
     pub tray: Arc<dyn TrayPort>,
+    pub overlay: Arc<dyn OverlayPort>,
     pub temp_store: Arc<dyn TempStore>,
 }
 
@@ -143,6 +144,9 @@ impl AppActor {
                 Action::SetTrayIdle => self.set_tray_state(TrayState::Idle).await,
                 Action::SetTrayRecording => self.set_tray_state(TrayState::Recording).await,
                 Action::SetTrayProcessing => self.set_tray_state(TrayState::Processing).await,
+                Action::ShowOverlay => self.show_overlay().await,
+                Action::ShowProcessingOverlay => self.show_processing_overlay().await,
+                Action::HideOverlay => self.hide_overlay().await,
                 Action::PlayStartCue => {
                     if let Err(error) = self.deps.cue_player.play_start().await {
                         warn!(error = %error, "failed to play start cue");
@@ -166,10 +170,12 @@ impl AppActor {
                     info!(reason, "ignored command");
                 }
                 Action::Restart => {
+                    self.hide_overlay().await;
                     self.shutdown().await?;
                     return Ok(Some(ActorExit::Restart));
                 }
                 Action::Shutdown => {
+                    self.hide_overlay().await;
                     self.shutdown().await?;
                     return Ok(Some(ActorExit::Shutdown));
                 }
@@ -195,6 +201,7 @@ impl AppActor {
                     text_len: text.len(),
                 });
                 self.publish_status();
+                self.hide_overlay().await;
                 spawn_paste_task(
                     self.internal_tx.clone(),
                     self.pipeline_dependencies(),
@@ -314,6 +321,7 @@ impl AppActor {
                 self.state = AppState::Idle;
                 self.publish_status();
                 self.set_tray_state(TrayState::Idle).await;
+                self.hide_overlay().await;
                 self.apply_post_recording_latency_policy().await;
                 let _ = self.deps.temp_store.cleanup_session(session_id).await;
                 let _ = self.deps.tray.show_error(&error.to_string()).await;
@@ -328,6 +336,7 @@ impl AppActor {
             self.state = AppState::Idle;
             self.publish_status();
             self.set_tray_state(TrayState::Idle).await;
+            self.hide_overlay().await;
             self.apply_post_recording_latency_policy().await;
             return Ok(());
         };
@@ -366,6 +375,7 @@ impl AppActor {
         self.state = AppState::Idle;
         self.publish_status();
         self.set_tray_state(TrayState::Idle).await;
+        self.hide_overlay().await;
     }
 
     async fn shutdown(&mut self) -> Result<(), AppError> {
@@ -513,6 +523,24 @@ impl AppActor {
         }
     }
 
+    async fn show_overlay(&self) {
+        if let Err(error) = self.deps.overlay.show_recording().await {
+            warn!(error = %error, "failed to show recording overlay");
+        }
+    }
+
+    async fn show_processing_overlay(&self) {
+        if let Err(error) = self.deps.overlay.show_processing().await {
+            warn!(error = %error, "failed to show processing overlay");
+        }
+    }
+
+    async fn hide_overlay(&self) {
+        if let Err(error) = self.deps.overlay.hide().await {
+            warn!(error = %error, "failed to hide overlay");
+        }
+    }
+
     fn pipeline_dependencies(&self) -> PipelineDependencies {
         PipelineDependencies {
             config: Arc::clone(&self.config),
@@ -564,6 +592,7 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingLifecycle {
+        fail_start: bool,
         stop_calls: Mutex<Vec<SessionId>>,
         abort_calls: Mutex<Vec<SessionId>>,
         idle_on_calls: Mutex<usize>,
@@ -663,6 +692,9 @@ mod tests {
             path: &Utf8Path,
         ) -> Result<Box<dyn ActiveRecording>, AppError> {
             let _ = (spec, path);
+            if self.lifecycle.fail_start {
+                return Err(AppError::message("capture unavailable"));
+            }
             Ok(Box::new(TrackingRecording {
                 session_id,
                 lifecycle: Arc::clone(&self.lifecycle),
@@ -1019,6 +1051,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (_actor, handle) = AppActor::new(AppConfig::default(), deps);
@@ -1040,6 +1073,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let mut config = AppConfig::default();
@@ -1071,6 +1105,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1089,9 +1124,42 @@ mod tests {
         );
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingOverlay {
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl OverlayPort for RecordingOverlay {
+        async fn show_recording(&self) -> Result<(), AppError> {
+            self.events
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push("show");
+            Ok(())
+        }
+
+        async fn show_processing(&self) -> Result<(), AppError> {
+            self.events
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push("processing");
+            Ok(())
+        }
+
+        async fn hide(&self) -> Result<(), AppError> {
+            self.events
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push("hide");
+            Ok(())
+        }
+    }
+
     #[tokio::test]
-    async fn normal_stop_should_schedule_balanced_keepalive() {
+    async fn overlay_should_follow_the_recording_cycle() {
         let lifecycle = Arc::new(RecordingLifecycle::default());
+        let overlay = Arc::new(RecordingOverlay::default());
         let deps = AppDependencies {
             audio_capture: Arc::new(TrackingAudioCapture {
                 lifecycle: Arc::clone(&lifecycle),
@@ -1104,6 +1172,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: overlay.clone(),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1121,6 +1190,147 @@ mod tests {
             .await
             .expect("stop should succeed");
 
+        assert_eq!(
+            *overlay.events.lock().expect("mutex should not be poisoned"),
+            vec!["show", "processing"]
+        );
+
+        let event = actor.internal_rx.recv().await.expect("processing event");
+        assert!(matches!(event, InternalEvent::ProcessingReady { .. }));
+        actor
+            .handle_internal_event(event)
+            .await
+            .expect("processing should finish");
+        assert!(matches!(actor.state, AppState::Pasting(_)));
+        assert_eq!(
+            *overlay.events.lock().expect("mutex should not be poisoned"),
+            vec!["show", "processing", "hide"]
+        );
+    }
+
+    #[tokio::test]
+    async fn processing_overlay_should_hide_on_failure_or_empty_result() {
+        for outcome in [
+            CycleOutcome::Failed("server request failed".into()),
+            CycleOutcome::Completed,
+        ] {
+            let overlay = Arc::new(RecordingOverlay::default());
+            let deps = AppDependencies {
+                audio_capture: Arc::new(FakeAudioCapture {
+                    started: Arc::new(Mutex::new(false)),
+                }),
+                trimmer: Arc::new(FakeTrimmer),
+                encoder: Arc::new(FakeTrimmer),
+                cue_player: Arc::new(FakeCuePlayer),
+                stt_client: Arc::new(FakeSttClient),
+                text_enhancer: Arc::new(NoopTextEnhancer),
+                clipboard: Arc::new(FakeClipboard),
+                paste: Arc::new(FakePaste),
+                tray: Arc::new(crate::ports::NullTrayPort),
+                overlay: overlay.clone(),
+                temp_store: Arc::new(FakeTempStore),
+            };
+            let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
+            let session_id = SessionId::new();
+            actor.state = AppState::Processing(glossa_core::ProcessingState { session_id });
+            actor.show_processing_overlay().await;
+            actor
+                .handle_internal_event(InternalEvent::ProcessingFinished {
+                    session_id,
+                    outcome,
+                })
+                .await
+                .expect("finish processing");
+            assert_eq!(actor.state, AppState::Idle);
+            assert_eq!(
+                *overlay.events.lock().expect("overlay events"),
+                vec!["processing", "hide"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn overlay_should_hide_on_capture_failure_cancel_restart_and_shutdown() {
+        for origin in [CommandOrigin::PortalShortcut, CommandOrigin::CliControl] {
+            for (fail_start, command) in [
+                (true, AppCommand::Shutdown { origin }),
+                (false, AppCommand::CancelRecording { origin }),
+                (false, AppCommand::Restart { origin }),
+                (false, AppCommand::Shutdown { origin }),
+            ] {
+                let overlay = Arc::new(RecordingOverlay::default());
+                let deps = AppDependencies {
+                    audio_capture: Arc::new(TrackingAudioCapture {
+                        lifecycle: Arc::new(RecordingLifecycle {
+                            fail_start,
+                            ..Default::default()
+                        }),
+                    }),
+                    trimmer: Arc::new(FakeTrimmer),
+                    encoder: Arc::new(FakeTrimmer),
+                    cue_player: Arc::new(FakeCuePlayer),
+                    stt_client: Arc::new(FakeSttClient),
+                    text_enhancer: Arc::new(NoopTextEnhancer),
+                    clipboard: Arc::new(FakeClipboard),
+                    paste: Arc::new(FakePaste),
+                    tray: Arc::new(crate::ports::NullTrayPort),
+                    overlay: overlay.clone(),
+                    temp_store: Arc::new(FakeTempStore),
+                };
+                let (actor, handle) = AppActor::new(AppConfig::default(), deps);
+                handle
+                    .send(AppCommand::ToggleRecording { origin })
+                    .expect("start");
+                let hides_before_shutdown =
+                    fail_start || matches!(command, AppCommand::CancelRecording { .. });
+                handle.send(command).expect("end recording");
+                handle
+                    .send(AppCommand::Shutdown { origin })
+                    .expect("shutdown");
+                actor.run().await.expect("actor exit");
+                let events = overlay.events.lock().expect("overlay events");
+                let expected = if hides_before_shutdown {
+                    vec!["show", "hide", "hide"]
+                } else {
+                    vec!["show", "hide"]
+                };
+                assert_eq!(*events, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_stop_should_schedule_balanced_keepalive() {
+        let lifecycle = Arc::new(RecordingLifecycle::default());
+        let deps = AppDependencies {
+            audio_capture: Arc::new(TrackingAudioCapture {
+                lifecycle: Arc::clone(&lifecycle),
+            }),
+            trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
+            cue_player: Arc::new(FakeCuePlayer),
+            stt_client: Arc::new(FakeSttClient),
+            text_enhancer: Arc::new(NoopTextEnhancer),
+            clipboard: Arc::new(FakeClipboard),
+            paste: Arc::new(FakePaste),
+            tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
+            temp_store: Arc::new(FakeTempStore),
+        };
+        let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
+
+        actor
+            .handle_command(AppCommand::ToggleRecording {
+                origin: CommandOrigin::CliControl,
+            })
+            .await
+            .expect("start should succeed");
+        actor
+            .handle_command(AppCommand::ToggleRecording {
+                origin: CommandOrigin::CliControl,
+            })
+            .await
+            .expect("stop should succeed");
         assert!(actor.recording_deadline.is_none());
         assert_eq!(
             *lifecycle
@@ -1146,6 +1356,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let config = AppConfig {
@@ -1224,6 +1435,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: tray.clone(),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: temp_store.clone(),
         };
         let (mut actor, handle) = AppActor::new(AppConfig::default(), deps);
@@ -1323,6 +1535,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1359,6 +1572,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: tray.clone(),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1416,6 +1630,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: tray.clone(),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1472,6 +1687,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
@@ -1520,6 +1736,7 @@ mod tests {
             clipboard: Arc::new(FakeClipboard),
             paste: Arc::new(FakePaste),
             tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
             temp_store: Arc::new(FakeTempStore),
         };
         let config = AppConfig {

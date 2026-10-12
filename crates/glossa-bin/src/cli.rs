@@ -22,6 +22,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Daemon,
+    #[command(hide = true)]
+    OverlayHelper,
     Service {
         #[command(subcommand)]
         service: ServiceCommand,
@@ -84,6 +86,13 @@ mod tests {
             cli.config.as_deref(),
             Some(std::path::Path::new("/tmp/glossa.toml"))
         );
+    }
+
+    #[test]
+    fn internal_overlay_helper_should_parse() {
+        let cli =
+            Cli::try_parse_from(["glossa", "overlay-helper"]).expect("overlay helper should parse");
+        assert!(matches!(cli.command, super::Command::OverlayHelper));
     }
 
     #[test]

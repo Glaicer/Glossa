@@ -11,8 +11,7 @@ use glossa_platform_linux::{
     secret::migrate_plaintext_api_keys,
 };
 
-use crate::bootstrap::{build_actor, build_tray, init_tracing, load_config};
-
+use crate::bootstrap::{build_actor, build_overlay, build_tray, init_tracing, load_config};
 const FATAL_ERROR_TITLE: &str = "Glossa fatal error";
 
 pub async fn run(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()> {
@@ -29,6 +28,7 @@ async fn run_inner(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()
     let tray = build_tray(&config_path, &config);
 
     loop {
+        let overlay = build_overlay(&config);
         let socket_path = config
             .control
             .socket_path
@@ -39,7 +39,8 @@ async fn run_inner(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()
         let cli_enabled = config.control.enable_cli;
 
         let tray_port: std::sync::Arc<dyn glossa_app::ports::TrayPort> = tray.clone();
-        let (actor, handle) = build_actor(config, tray_port.clone())?;
+        let overlay_port: std::sync::Arc<dyn glossa_app::ports::OverlayPort> = overlay.clone();
+        let (actor, handle) = build_actor(config, tray_port.clone(), overlay_port)?;
         tray.bind_command_sender(handle.command_sender());
         let mut tasks: Vec<JoinHandle<()>> = Vec::new();
         let escape_status_rx = handle.subscribe();

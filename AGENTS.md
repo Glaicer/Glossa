@@ -155,6 +155,7 @@ The heart of the application. Defines **port traits** and the **pure reducer**.
 - `ClipboardWriter` — put text into the clipboard
 - `PasteBackend` — emulate a keyboard paste shortcut
 - `TrayPort` / `NullTrayPort` — update tray icon state
+- `OverlayPort` / `NullOverlayPort` — show/hide the recording indicator overlay
 - `TempStore` — manage temp file paths and cleanup
 - `CommandSource` — produce `AppCommand` values (portal, IPC)
 
@@ -199,6 +200,7 @@ One shared `HttpSttClient` implementing `SttClient`, with thin strategy construc
 | `portal/shortcut_source.rs` | `PortalShortcutSource` implements `CommandSource` via `ashpd` GlobalShortcuts |
 | `portal/mapping.rs` | Pure `map_portal_signal_to_command(mode, signal) → Option<AppCommand>` |
 | `tray/tray_port.rs` | `BestEffortTrayPort` — GTK tray icon on a dedicated thread |
+| `overlay/overlay_port.rs` | `BestEffortOverlayPort` — supervised same-binary XWayland recording pill (no focus, click-through) |
 | `clipboard/wl_copy.rs` | `WlCopyClipboard` implements `ClipboardWriter` |
 | `paste/dotool.rs` | `DotoolPasteBackend` implements `PasteBackend` |
 | `ipc/server.rs` | `IpcServer` — `tokio::net::UnixListener` JSON protocol |
@@ -262,11 +264,11 @@ All platform-specific code lives behind traits in `glossa-app::ports`. The app l
 | CPAL callback thread(s) | Deliver PCM samples into a bounded channel |
 | WAV writer thread | Reads PCM from channel, writes to disk via `hound` |
 
-The tray **must** live on its own thread because GTK requires owning the event loop.
+The tray **must** live on its own thread because GTK requires owning the event loop. The recording pill runs GTK in the hidden `glossa overlay-helper` subprocess; only that child receives `GDK_BACKEND=x11`. Microphone levels cross a private Unix socket; the child cannot read the daemon's atomic meter. Hide/drop kills and reaps the helper.
 
 ### Daemon Restart Loop
 
-The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit::Restart` (e.g., after tray shortcut change), it reloads config, rebuilds the actor, and re-enters the loop. The tray (`BestEffortTrayPort`) is created once and survives restarts — only its command sender is rebound.
+The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit::Restart` (e.g., after tray shortcut change), it reloads config, rebuilds the actor, and re-enters the loop. The tray (`BestEffortTrayPort`) is created once and survives restarts — only its command sender is rebound. The overlay is rebuilt inside the restart loop so changed `ui.overlay` settings apply.
 
 ---
 
@@ -405,8 +407,10 @@ glossa update → glossa-bin::cmd::update → glossa-platform-linux::updater::ru
 | `dotool` | Keyboard paste emulation | `dotool` |
 | `dconf` | GNOME settings (shortcut rebind) | `dconf-cli` |
 | `ffmpeg` | Encode non-WAV uploads | `ffmpeg` (Ubuntu), `ffmpeg-free` (Fedora) |
+| XWayland | Optional recording indicator in the GNOME Wayland session | Existing session X11 display/authentication; no overlay Shell extension |
 
 The tray requires the **AppIndicator and KStatusNotifierItem Support** GNOME Shell extension. If absent, the daemon continues without tray — it does not crash.
+The recording overlay uses GTK3/XWayland through the same shipped `glossa` executable. Display initialization or helper failure disables only the indicator and logs a warning; dictation continues. Keep GTK runtime requirements for the tray and other UI. Ordinary windows on Fedora GNOME Wayland with the current monitor arrangement and scale are verified; Ubuntu runtime, fullscreen, Overview, workspace transitions, hotplug, and other scaling remain unverified. XWayland use does not add X11 desktop support.
 Installer and updater scripts additionally rely on standard user-session tooling such as `systemctl`, `tar`, `sha256sum`, and `curl`/`wget`.
 
 ---
@@ -452,3 +456,17 @@ ExecStart=%h/.cargo/bin/glossa --config %h/.config/glossa/config.toml daemon
 - GUI settings window
 - System-wide daemon
 - Multiple microphones with UI switching
+
+## Agent skills
+
+### Issue tracker
+
+Track work as local Markdown tickets under `.scratch/`. Before reading or publishing tickets, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five triage roles. Before assigning ticket statuses, read `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single shared domain context. Before exploring domain terminology or architectural decisions, read `docs/agents/domain.md`.

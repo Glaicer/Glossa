@@ -12,6 +12,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::OverlayHelper => {
+            glossa_platform_linux::overlay::run_overlay_helper().map_err(anyhow::Error::msg)
+        }
         Command::Daemon => cmd::daemon::run(cli.config).await,
         Command::Service { service } => cmd::service::run(service).await,
         Command::Ctl { ctl } => cmd::ctl::run(cli.config, ctl).await,
