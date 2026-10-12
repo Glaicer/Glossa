@@ -145,6 +145,7 @@ impl AppActor {
                 Action::SetTrayRecording => self.set_tray_state(TrayState::Recording).await,
                 Action::SetTrayProcessing => self.set_tray_state(TrayState::Processing).await,
                 Action::ShowOverlay => self.show_overlay().await,
+                Action::ShowProcessingOverlay => self.show_processing_overlay().await,
                 Action::HideOverlay => self.hide_overlay().await,
                 Action::PlayStartCue => {
                     if let Err(error) = self.deps.cue_player.play_start().await {
@@ -200,6 +201,7 @@ impl AppActor {
                     text_len: text.len(),
                 });
                 self.publish_status();
+                self.hide_overlay().await;
                 spawn_paste_task(
                     self.internal_tx.clone(),
                     self.pipeline_dependencies(),
@@ -334,6 +336,7 @@ impl AppActor {
             self.state = AppState::Idle;
             self.publish_status();
             self.set_tray_state(TrayState::Idle).await;
+            self.hide_overlay().await;
             self.apply_post_recording_latency_policy().await;
             return Ok(());
         };
@@ -372,6 +375,7 @@ impl AppActor {
         self.state = AppState::Idle;
         self.publish_status();
         self.set_tray_state(TrayState::Idle).await;
+        self.hide_overlay().await;
     }
 
     async fn shutdown(&mut self) -> Result<(), AppError> {
@@ -525,9 +529,15 @@ impl AppActor {
         }
     }
 
+    async fn show_processing_overlay(&self) {
+        if let Err(error) = self.deps.overlay.show_processing().await {
+            warn!(error = %error, "failed to show processing overlay");
+        }
+    }
+
     async fn hide_overlay(&self) {
         if let Err(error) = self.deps.overlay.hide().await {
-            warn!(error = %error, "failed to hide recording overlay");
+            warn!(error = %error, "failed to hide overlay");
         }
     }
 
@@ -1129,6 +1139,14 @@ mod tests {
             Ok(())
         }
 
+        async fn show_processing(&self) -> Result<(), AppError> {
+            self.events
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push("processing");
+            Ok(())
+        }
+
         async fn hide(&self) -> Result<(), AppError> {
             self.events
                 .lock()
@@ -1174,8 +1192,61 @@ mod tests {
 
         assert_eq!(
             *overlay.events.lock().expect("mutex should not be poisoned"),
-            vec!["show", "hide"]
+            vec!["show", "processing"]
         );
+
+        let event = actor.internal_rx.recv().await.expect("processing event");
+        assert!(matches!(event, InternalEvent::ProcessingReady { .. }));
+        actor
+            .handle_internal_event(event)
+            .await
+            .expect("processing should finish");
+        assert!(matches!(actor.state, AppState::Pasting(_)));
+        assert_eq!(
+            *overlay.events.lock().expect("mutex should not be poisoned"),
+            vec!["show", "processing", "hide"]
+        );
+    }
+
+    #[tokio::test]
+    async fn processing_overlay_should_hide_on_failure_or_empty_result() {
+        for outcome in [
+            CycleOutcome::Failed("server request failed".into()),
+            CycleOutcome::Completed,
+        ] {
+            let overlay = Arc::new(RecordingOverlay::default());
+            let deps = AppDependencies {
+                audio_capture: Arc::new(FakeAudioCapture {
+                    started: Arc::new(Mutex::new(false)),
+                }),
+                trimmer: Arc::new(FakeTrimmer),
+                encoder: Arc::new(FakeTrimmer),
+                cue_player: Arc::new(FakeCuePlayer),
+                stt_client: Arc::new(FakeSttClient),
+                text_enhancer: Arc::new(NoopTextEnhancer),
+                clipboard: Arc::new(FakeClipboard),
+                paste: Arc::new(FakePaste),
+                tray: Arc::new(crate::ports::NullTrayPort),
+                overlay: overlay.clone(),
+                temp_store: Arc::new(FakeTempStore),
+            };
+            let (mut actor, _handle) = AppActor::new(AppConfig::default(), deps);
+            let session_id = SessionId::new();
+            actor.state = AppState::Processing(glossa_core::ProcessingState { session_id });
+            actor.show_processing_overlay().await;
+            actor
+                .handle_internal_event(InternalEvent::ProcessingFinished {
+                    session_id,
+                    outcome,
+                })
+                .await
+                .expect("finish processing");
+            assert_eq!(actor.state, AppState::Idle);
+            assert_eq!(
+                *overlay.events.lock().expect("overlay events"),
+                vec!["processing", "hide"]
+            );
+        }
     }
 
     #[tokio::test]

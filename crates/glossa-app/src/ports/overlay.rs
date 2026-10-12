@@ -2,10 +2,11 @@ use async_trait::async_trait;
 
 use crate::AppError;
 
-/// On-screen overlay indicator shown while recording.
+/// On-screen overlay indicator shown while recording or processing.
 #[async_trait]
 pub trait OverlayPort: Send + Sync {
     async fn show_recording(&self) -> Result<(), AppError>;
+    async fn show_processing(&self) -> Result<(), AppError>;
     async fn hide(&self) -> Result<(), AppError>;
 }
 
@@ -16,6 +17,10 @@ pub struct NullOverlayPort;
 #[async_trait]
 impl OverlayPort for NullOverlayPort {
     async fn show_recording(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    async fn show_processing(&self) -> Result<(), AppError> {
         Ok(())
     }
 

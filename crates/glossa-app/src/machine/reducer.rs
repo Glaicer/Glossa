@@ -76,7 +76,7 @@ pub fn reduce(state: &AppState, command: &AppCommand) -> Result<Decision, CoreEr
                 session_id: *session_id,
             }),
             actions: vec![
-                Action::HideOverlay,
+                Action::ShowProcessingOverlay,
                 Action::PlayStopCue,
                 Action::SetTrayProcessing,
                 Action::StopRecording {
@@ -167,6 +167,8 @@ mod tests {
         .expect("reducer should succeed");
 
         assert!(matches!(decision.next_state, AppState::Processing(_)));
+        assert!(decision.actions.contains(&Action::ShowProcessingOverlay));
+        assert!(!decision.actions.contains(&Action::HideOverlay));
     }
 
     #[test]

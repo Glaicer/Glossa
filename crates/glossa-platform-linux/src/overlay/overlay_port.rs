@@ -18,11 +18,12 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(50);
 
 enum OverlayCommand {
-    Show,
+    ShowRecording,
+    ShowProcessing,
     Hide,
 }
 
-/// Best-effort recording indicator isolated from the daemon's GTK backend.
+/// Best-effort recording and processing indicator isolated from the daemon's GTK backend.
 pub struct BestEffortOverlayPort {
     worker: Option<OverlayWorker>,
 }
@@ -121,7 +122,12 @@ impl OverlayPort for BestEffortOverlayPort {
         // The supervisor transports the process-global peak, so reset it here;
         // otherwise the previous cycle's final level replays into a new recording.
         glossa_app::level::record_peak(0.0);
-        self.send_command(OverlayCommand::Show).await;
+        self.send_command(OverlayCommand::ShowRecording).await;
+        Ok(())
+    }
+
+    async fn show_processing(&self) -> Result<(), AppError> {
+        self.send_command(OverlayCommand::ShowProcessing).await;
         Ok(())
     }
 
@@ -164,9 +170,14 @@ fn run_worker(
     command_rx: mpsc::Receiver<(OverlayCommand, oneshot::Sender<()>)>,
 ) {
     let mut helper: Option<Helper> = None;
+    let mut recording = false;
     loop {
         match command_rx.recv_timeout(EVENT_POLL_INTERVAL) {
-            Ok((OverlayCommand::Show, reply)) => {
+            Ok((
+                mode @ (OverlayCommand::ShowRecording | OverlayCommand::ShowProcessing),
+                reply,
+            )) => {
+                recording = matches!(mode, OverlayCommand::ShowRecording);
                 if helper.is_none() {
                     match Helper::spawn(&mut command) {
                         Ok(child) => helper = Some(child),
@@ -174,7 +185,8 @@ fn run_worker(
                     }
                 }
                 if let Some(child) = helper.as_mut() {
-                    if let Err(error) = writeln!(child.input, "show") {
+                    let message = if recording { "show" } else { "processing" };
+                    if let Err(error) = writeln!(child.input, "{message}") {
                         warn!(%error, "recording overlay helper is unavailable");
                         helper = None;
                     }
@@ -190,7 +202,7 @@ fn run_worker(
         }
         if let Some(child) = helper.as_mut() {
             match child.child.try_wait() {
-                Ok(None) => {
+                Ok(None) if recording => {
                     if let Err(error) =
                         writeln!(child.input, "level {}", glossa_app::level::level_percent())
                     {
@@ -198,6 +210,7 @@ fn run_worker(
                         helper = None;
                     }
                 }
+                Ok(None) => {}
                 Ok(Some(status)) => {
                     warn!(%status, "recording overlay helper exited; dictation continues");
                     helper = None;
@@ -259,6 +272,19 @@ mod tests {
         glossa_app::level::record_peak(1.0);
         let levels = read_log(&path, "level 100\n").await;
         assert!(levels.contains("level 100\n"), "{levels}");
+        overlay
+            .show_processing()
+            .await
+            .expect("best effort processing");
+        let processing = read_log(&path, "processing\n").await;
+        assert_eq!(processing.split_whitespace().next().expect("pid"), pid);
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let processing = std::fs::read_to_string(&path).expect("processing log");
+        let after_processing = processing
+            .split_once("processing\n")
+            .expect("processing command")
+            .1;
+        assert!(!after_processing.contains("level "), "{processing}");
         overlay.hide().await.expect("best effort hide");
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
         std::fs::write(&path, "").expect("reset fixture log");
@@ -309,6 +335,10 @@ mod tests {
             .arg(&path);
         let overlay = BestEffortOverlayPort::with_config_and_command(&config, Some(command));
         overlay.show_recording().await.expect("disabled show");
+        overlay
+            .show_processing()
+            .await
+            .expect("disabled processing");
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
         overlay.hide().await.expect("disabled hide");
         drop(overlay);
@@ -329,6 +359,10 @@ mod tests {
                 .show_recording()
                 .await
                 .expect("missing helper must not fail show");
+            overlay
+                .show_processing()
+                .await
+                .expect("missing helper must not fail processing");
             overlay
                 .hide()
                 .await

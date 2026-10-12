@@ -10,6 +10,7 @@ pub enum Action {
     SetTrayRecording,
     SetTrayProcessing,
     ShowOverlay,
+    ShowProcessingOverlay,
     HideOverlay,
     PlayStartCue,
     PlayStopCue,

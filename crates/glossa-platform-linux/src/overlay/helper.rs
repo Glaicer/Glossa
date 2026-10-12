@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use gtk::{gdk, glib, prelude::*};
 
-use super::pill::PillWindow;
+use super::pill::{PillMode, PillWindow};
 
-/// Runs the isolated recording indicator with line commands on stdin.
+/// Runs the isolated recording and processing indicator with line commands on stdin.
 pub fn run_overlay_helper() -> Result<(), String> {
     gtk::init()
         .map_err(|error| format!("cannot initialize XWayland recording overlay: {error}"))?;
@@ -33,7 +33,8 @@ pub fn run_overlay_helper() -> Result<(), String> {
         loop {
             match rx.try_recv() {
                 Ok(line) => match line.trim() {
-                    "show" => pill.set_visible(true),
+                    "show" => pill.show(PillMode::Recording),
+                    "processing" => pill.show(PillMode::Processing),
                     "hide" => pill.set_visible(false),
                     "quit" => {
                         pill.set_visible(false);

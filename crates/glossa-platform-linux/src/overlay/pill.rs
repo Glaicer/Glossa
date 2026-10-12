@@ -28,15 +28,24 @@ const MIN_BAR_FRACTION: f64 = BAR_MIN_HEIGHT / BAR_MAX_HEIGHT;
 const BAR_MULTIPLIERS: [f64; BAR_COUNT] =
     [0.30, 0.48, 0.66, 0.84, 1.0, 1.0, 0.84, 0.66, 0.48, 0.30];
 
+const DOT_MIN_RADIUS: f64 = 3.0;
+const DOT_MAX_RADIUS: f64 = 8.0;
+
 const LEVEL_ATTACK: f32 = 0.45;
 const LEVEL_DECAY: f32 = 0.10;
 
-/// XWayland recording indicator drawn as a dark pill with a white
-/// microphone glyph and a live waveform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PillMode {
+    Recording,
+    Processing,
+}
+
+/// XWayland indicator drawn as a dark pill with a live waveform or processing dots.
 pub struct PillWindow {
     window: Window,
     level: Rc<Cell<f32>>,
     target: Rc<Cell<f32>>,
+    mode: Rc<Cell<PillMode>>,
 }
 
 impl PillWindow {
@@ -66,11 +75,14 @@ impl PillWindow {
         drawing_area.set_size_request(PILL_WIDTH, PILL_HEIGHT);
 
         let level = Rc::new(Cell::new(0.0_f32));
+        let mode = Rc::new(Cell::new(PillMode::Recording));
+        let draw_mode = Rc::clone(&mode);
         let started_at = Instant::now();
         let draw_level = Rc::clone(&level);
         drawing_area.connect_draw(move |_area, context| {
             draw_pill(
                 context,
+                draw_mode.get(),
                 draw_level.get(),
                 started_at.elapsed().as_secs_f64(),
             );
@@ -94,7 +106,13 @@ impl PillWindow {
             window,
             level,
             target,
+            mode,
         }
+    }
+
+    pub fn show(&self, mode: PillMode) {
+        self.mode.set(mode);
+        self.set_visible(true);
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -131,7 +149,7 @@ fn make_click_through(window: &Window) {
     window.input_shape_combine_region(Some(&cairo::Region::create()));
 }
 
-fn draw_pill(context: &Context, level: f32, elapsed_secs: f64) {
+fn draw_pill(context: &Context, mode: PillMode, level: f32, elapsed_secs: f64) {
     context.set_operator(cairo::Operator::Source);
     context.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     context.paint().expect("clear pill");
@@ -147,10 +165,29 @@ fn draw_pill(context: &Context, level: f32, elapsed_secs: f64) {
     );
     context.fill().expect("fill pill background");
 
-    draw_microphone(context);
-
-    for index in 0..BAR_COUNT {
-        draw_bar(context, index, bar_fraction(level, elapsed_secs, index));
+    match mode {
+        PillMode::Recording => {
+            draw_microphone(context);
+            for index in 0..BAR_COUNT {
+                draw_bar(context, index, bar_fraction(level, elapsed_secs, index));
+            }
+        }
+        PillMode::Processing => {
+            draw_server(context);
+            context.set_source_rgb(1.0, 1.0, 1.0);
+            for index in 0..BAR_COUNT {
+                let x = BAR_ORIGIN_X + BAR_WIDTH / 2.0 + index as f64 * (BAR_WIDTH + BAR_GAP);
+                context.new_path();
+                context.arc(
+                    x,
+                    f64::from(PILL_HEIGHT) / 2.0,
+                    dot_radius(elapsed_secs, index),
+                    0.0,
+                    2.0 * PI,
+                );
+                context.fill().expect("fill processing dot");
+            }
+        }
     }
 }
 
@@ -164,6 +201,32 @@ fn draw_microphone(context: &Context) {
     append_microphone_stand(context);
     context.fill().expect("fill microphone stand");
     context.restore().expect("restore context after microphone");
+}
+
+fn draw_server(context: &Context) {
+    context.save().expect("save context for server");
+    context.translate(MIC_ORIGIN_X, (f64::from(PILL_HEIGHT) - MIC_SIZE) / 2.0);
+    context.scale(MIC_SIZE / 512.0, MIC_SIZE / 512.0);
+    context.set_source_rgb(1.0, 1.0, 1.0);
+    context.set_fill_rule(cairo::FillRule::EvenOdd);
+    for y in [32.0, 192.0, 352.0] {
+        rounded_rectangle(context, 0.0, y, 512.0, 128.0, 32.0);
+        for x in [368.0, 432.0] {
+            context.new_sub_path();
+            context.arc(x, y + 64.0, 24.0, 0.0, 2.0 * PI);
+        }
+        context.fill().expect("fill server rack");
+    }
+    context.restore().expect("restore context after server");
+}
+
+fn dot_radius(elapsed_secs: f64, index: usize) -> f64 {
+    let phase = index as f64 * 1.7;
+    let pulse = 0.5
+        + 0.5
+            * (0.65 * (elapsed_secs * 4.0 + phase).sin()
+                + 0.35 * (elapsed_secs * 2.7 + phase * 1.3).sin());
+    DOT_MIN_RADIUS + (DOT_MAX_RADIUS - DOT_MIN_RADIUS) * pulse
 }
 
 fn draw_bar(context: &Context, index: usize, fraction: f64) {
@@ -249,7 +312,10 @@ pub fn bar_fraction(level: f32, elapsed_secs: f64, index: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_fraction, draw_pill, smooth_level, MIN_BAR_FRACTION};
+    use super::{
+        bar_fraction, dot_radius, draw_pill, smooth_level, PillMode, DOT_MAX_RADIUS,
+        DOT_MIN_RADIUS, MIN_BAR_FRACTION,
+    };
     use gtk::cairo;
     #[test]
     fn silence_should_rest_at_minimum_bars() {
@@ -297,7 +363,7 @@ mod tests {
             .expect("create test surface");
         {
             let context = cairo::Context::new(&surface).expect("create test context");
-            draw_pill(&context, 0.5, 1.0);
+            draw_pill(&context, PillMode::Recording, 0.5, 1.0);
         }
         surface.flush();
 
@@ -313,5 +379,45 @@ mod tests {
 
         let has_white = (24..56).any(|x| (20..52).any(|y| pixel(x, y) == (255, 255, 255)));
         assert!(has_white, "microphone area should contain white pixels");
+    }
+
+    #[test]
+    fn processing_dots_should_pulse_independently_within_bounds() {
+        for index in 0..10 {
+            for frame in 0..600 {
+                let radius = dot_radius(f64::from(frame) / 60.0, index);
+                assert!((DOT_MIN_RADIUS..=DOT_MAX_RADIUS).contains(&radius));
+            }
+            assert_ne!(dot_radius(0.0, index), dot_radius(0.3, index));
+        }
+        assert_ne!(dot_radius(0.3, 0), dot_radius(0.3, 1));
+    }
+
+    #[test]
+    fn processing_pill_should_draw_server_and_dots_instead_of_waveform() {
+        let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 72)
+            .expect("create test surface");
+        {
+            let context = cairo::Context::new(&surface).expect("create test context");
+            draw_pill(&context, PillMode::Processing, 1.0, 0.0);
+        }
+        surface.flush();
+        let stride = surface.stride() as usize;
+        let data = surface.data().expect("surface data should be readable");
+        let pixel = |x: usize, y: usize| {
+            let offset = y * stride + x * 4;
+            (data[offset + 2], data[offset + 1], data[offset + 3])
+        };
+        assert_eq!(pixel(2, 2), (0, 0, 0));
+        assert_eq!(pixel(160, 2), (64, 64, 255));
+        for y in [26, 36, 46] {
+            assert_eq!(pixel(30, y), (255, 255, 255));
+        }
+        assert_eq!(pixel(30, 31), (64, 64, 255));
+        assert_eq!(pixel(47, 26), (64, 64, 255));
+        for index in 0..10 {
+            assert_eq!(pixel(80 + index * 23, 36), (255, 255, 255));
+            assert_eq!(pixel(80 + index * 23, 24), (64, 64, 255));
+        }
     }
 }
