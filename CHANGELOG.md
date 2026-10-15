@@ -5,6 +5,25 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-15
+
+Glossa can now transcribe audio files from the tray menu. Choose a file, run transcription, and copy the result when you need it. The window uses your current speech-to-text provider and applies the LLM enhancer if it is enabled.
+
+### Added
+
+- A `Transcribe File` tray menu item opens a window with a file picker and a scrollable transcription field. The selected filename appears after `Choose file` and is shortened to fit, with the full path available on hover.
+- `Transcribe` sends the selected file for processing without blocking the window or the tray. After a successful transcription, `Retry` processes the same file again. `Clear` empties the result while keeping the file selected, and `Copy` puts the result on the clipboard without pasting it into another app.
+- `Close` and Esc close the window and cancel any request still in progress.
+- File validation rejects empty files, unsupported extensions, and files larger than 20 MB. The size is checked when choosing a file and again before transcription. Processing errors appear in the window.
+
+### Fixed
+
+- Audio uploads now use the correct MIME type for uppercase extensions such as `.MP3`.
+
+### Notes
+
+- File transcription accepts WAV, MP3, M4A, FLAC, OGG, and AAC files up to 20,000,000 bytes. Files are uploaded as they are, without trimming or re-encoding; the provider must support the selected format. Glossa does not modify or delete the source file.
+
 ## [1.7.0] - 2026-10-12
 
 ### Added
@@ -198,6 +217,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.8.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.0
 [1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
 [1.5.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.5.1

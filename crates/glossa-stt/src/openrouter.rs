@@ -41,7 +41,16 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn uppercase_file_extension_should_keep_audio_mime() {
+        check_upload_with_extension("MP3", "audio/mpeg").await;
+    }
+
     async fn check_upload(format: AudioFormat, mime: &str) {
+        check_upload_with_extension(format.extension(), mime).await;
+    }
+
+    async fn check_upload_with_extension(extension: &str, mime: &str) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("local address");
         let server = tokio::spawn(async move {
@@ -80,10 +89,7 @@ mod tests {
         });
 
         let session_id = SessionId::new();
-        let path = std::env::temp_dir().join(format!(
-            "glossa-openrouter-{session_id}.{}",
-            format.extension()
-        ));
+        let path = std::env::temp_dir().join(format!("glossa-openrouter-{session_id}.{extension}"));
         tokio::fs::write(&path, b"RIFF-test-audio")
             .await
             .expect("write audio");
@@ -113,8 +119,7 @@ mod tests {
         assert!(request.contains("name=\"model\"\r\n\r\nopenai/whisper-large-v3"));
         assert!(request.contains("name=\"file\"; filename=\"glossa-openrouter-"));
         assert!(request.contains(&format!(
-            "filename=\"glossa-openrouter-{session_id}.{}\"",
-            format.extension()
+            "filename=\"glossa-openrouter-{session_id}.{extension}\""
         )));
         assert!(request.contains(&format!("Content-Type: {mime}")));
         assert!(request.contains("RIFF-test-audio"));

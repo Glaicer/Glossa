@@ -5,12 +5,17 @@ use anyhow::{anyhow, Context};
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
+use glossa_app::services::file_transcription::FileTranscriptionService;
 use glossa_app::{ports::OverlayPort, ports::TrayPort, AppActor, AppDependencies};
 use glossa_audio::{CpalAudioCapture, CuePlayerBackend, FfmpegAudioEncoder, WavSilenceTrimmer};
 use glossa_core::{AppConfig, LogLevel};
 use glossa_platform_linux::{
-    clipboard::WlCopyClipboard, overlay::BestEffortOverlayPort, paste::DotoolPasteBackend, secret,
-    temp::XdgTempStore, tray::BestEffortTrayPort,
+    clipboard::WlCopyClipboard,
+    overlay::BestEffortOverlayPort,
+    paste::DotoolPasteBackend,
+    secret,
+    temp::XdgTempStore,
+    tray::{BestEffortTrayPort, FileTranscriptionUi},
 };
 use glossa_stt::{build_client, build_text_enhancer};
 
@@ -50,7 +55,27 @@ pub fn init_tracing(config: &AppConfig) -> anyhow::Result<()> {
 
 /// Builds the tray port shown in the system tray.
 pub fn build_tray(config_path: &Path, config: &AppConfig) -> Arc<BestEffortTrayPort> {
-    Arc::new(BestEffortTrayPort::new(config_path.to_path_buf(), config))
+    let service = Arc::new(FileTranscriptionService::new(
+        build_client(
+            config,
+            Arc::new(secret::LazyApiKey::new(config.provider.api_key.clone())),
+        ),
+        build_text_enhancer(
+            config,
+            Arc::new(secret::LazyApiKey::new(config.llm.api_key.clone())),
+        ),
+        config.llm.enabled,
+    ));
+    let file_transcription = FileTranscriptionUi::new(
+        service,
+        Arc::new(WlCopyClipboard::new(config.paste.clipboard_command.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    Arc::new(BestEffortTrayPort::new(
+        config_path.to_path_buf(),
+        config,
+        file_transcription,
+    ))
 }
 
 /// Builds the recording overlay shown while dictation is active.

@@ -62,7 +62,7 @@ impl SttClient for HttpSttClient {
         let mime = audio
             .path
             .extension()
-            .and_then(AudioFormat::from_extension)
+            .and_then(|extension| AudioFormat::from_extension(&extension.to_ascii_lowercase()))
             .map_or("application/octet-stream", AudioFormat::mime_type);
         let file_part = Part::bytes(bytes)
             .file_name(filename)

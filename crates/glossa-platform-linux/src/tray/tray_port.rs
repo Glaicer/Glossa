@@ -46,6 +46,7 @@ use crate::updater::{check_for_update, install_update, UpdaterStatus};
 
 use super::settings::{write_settings_to_config, SettingsValues};
 use super::settings_dialog::edit_settings;
+use super::FileTranscriptionUi;
 
 const TRAY_THREAD_NAME: &str = "glossa-tray";
 const NOTIFY_SEND_COMMAND: &str = "notify-send";
@@ -68,6 +69,7 @@ const APPINDICATOR_LIBRARY_DIRS: &[&str] = &[
 
 /// Best-effort tray port that runs a GTK/AppIndicator tray on GNOME Wayland.
 pub struct BestEffortTrayPort {
+    file_transcription: FileTranscriptionUi,
     enabled: bool,
     ui: UiConfig,
     shortcut_binding: Option<ShortcutBindingConfig>,
@@ -81,8 +83,13 @@ pub struct BestEffortTrayPort {
 
 impl BestEffortTrayPort {
     #[must_use]
-    pub fn new(config_path: PathBuf, config: &AppConfig) -> Self {
+    pub fn new(
+        config_path: PathBuf,
+        config: &AppConfig,
+        file_transcription: FileTranscriptionUi,
+    ) -> Self {
         Self {
+            file_transcription,
             enabled: config.ui.tray,
             ui: config.ui.clone(),
             shortcut_binding: (config.input.backend == InputBackend::Portal).then_some(
@@ -151,6 +158,7 @@ impl BestEffortTrayPort {
         let settings = self.settings.clone();
         let config_path = self.config_path.clone();
         let app_command_tx = self.app_command_tx.clone();
+        let file_transcription = self.file_transcription.clone();
         let handle = match thread::Builder::new()
             .name(TRAY_THREAD_NAME.into())
             .spawn(move || {
@@ -161,6 +169,7 @@ impl BestEffortTrayPort {
                     config_path,
                     app_command_tx,
                     command_rx,
+                    file_transcription,
                 )
             }) {
             Ok(handle) => handle,
@@ -260,20 +269,27 @@ fn run_tray_thread(
     config_path: PathBuf,
     app_command_tx: std::sync::Arc<Mutex<Option<UnboundedSender<AppCommand>>>>,
     command_rx: mpsc::Receiver<TrayCommand>,
+    file_transcription: FileTranscriptionUi,
 ) {
     if let Err(error) = gtk_init() {
         warn!(error = %error, "failed to initialize GTK tray runtime");
         return;
     }
 
-    let runtime =
-        match TrayRuntime::new(&ui, shortcut_binding, settings, config_path, app_command_tx) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                warn!(error = %error, "failed to create tray icon");
-                return;
-            }
-        };
+    let runtime = match TrayRuntime::new(
+        &ui,
+        shortcut_binding,
+        settings,
+        config_path,
+        app_command_tx,
+        file_transcription,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            warn!(error = %error, "failed to create tray icon");
+            return;
+        }
+    };
 
     info!("tray icon initialized");
     loop {
@@ -326,6 +342,8 @@ fn pump_gtk_events() {
 }
 
 struct TrayRuntime {
+    file_transcription: FileTranscriptionUi,
+    transcribe_file_id: tray_icon::menu::MenuId,
     _tray_icon: TrayIcon,
     change_shortcut_id: Option<tray_icon::menu::MenuId>,
     settings_id: tray_icon::menu::MenuId,
@@ -349,8 +367,11 @@ impl TrayRuntime {
         settings: SettingsValues,
         config_path: PathBuf,
         app_command_tx: std::sync::Arc<Mutex<Option<UnboundedSender<AppCommand>>>>,
+        file_transcription: FileTranscriptionUi,
     ) -> Result<Self, String> {
         let icons = TrayIcons::load(ui)?;
+        let transcribe_file_item = MenuItem::new("Transcribe File", true, None);
+        let transcribe_file_id = transcribe_file_item.id().clone();
         let change_shortcut_item = MenuItem::new("Change shortcut", true, None);
         let change_shortcut_id = shortcut_binding
             .as_ref()
@@ -369,6 +390,8 @@ impl TrayRuntime {
         let exit_id = exit_item.id().clone();
 
         let menu = Menu::new();
+        menu.append(&transcribe_file_item)
+            .map_err(|error| format!("failed to build tray menu: {error}"))?;
         if shortcut_binding.is_some() {
             menu.append(&change_shortcut_item)
                 .map_err(|error| format!("failed to build tray menu: {error}"))?;
@@ -395,6 +418,8 @@ impl TrayRuntime {
 
         Ok(Self {
             _tray_icon: tray_icon,
+            file_transcription,
+            transcribe_file_id,
             change_shortcut_id,
             settings_id,
             update_id,
@@ -436,6 +461,10 @@ impl TrayRuntime {
 
     fn handle_menu_events(&self) {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if event.id == self.transcribe_file_id {
+                self.file_transcription.show();
+                continue;
+            }
             if self
                 .change_shortcut_id
                 .as_ref()
