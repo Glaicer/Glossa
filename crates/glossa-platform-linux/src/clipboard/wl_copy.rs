@@ -30,6 +30,7 @@ impl WlCopyClipboard {
 
         let mut child = command
             .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|error| AppError::io("failed to spawn wl-copy", error))?;
 
@@ -131,6 +132,16 @@ impl ClipboardWriter for WlCopyClipboard {
 
     async fn set_text(&self, text: &str) -> Result<(), AppError> {
         self.copy_bytes(None, text.as_bytes()).await
+    }
+
+    async fn holds_text(&self, text: &str) -> Result<bool, AppError> {
+        let output = Command::new(&self.paste_command)
+            .args(["--no-newline", "--type", "text"])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|error| AppError::io("failed to spawn wl-paste", error))?;
+        Ok(output.status.success() && output.stdout == text.as_bytes())
     }
 
     async fn restore(&self, snapshot: ClipboardSnapshot) -> Result<(), AppError> {

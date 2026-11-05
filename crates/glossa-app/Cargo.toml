@@ -12,5 +12,8 @@ tokio.workspace = true
 tracing.workspace = true
 glossa-core = { path = "../glossa-core" }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

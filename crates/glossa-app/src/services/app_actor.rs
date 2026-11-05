@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{error, info, warn};
 
 use glossa_core::{
@@ -55,6 +55,7 @@ pub struct AppActor {
     internal_rx: mpsc::UnboundedReceiver<InternalEvent>,
     status_store: StatusStore,
     manual_input_stream_override: Option<bool>,
+    paste_task: Option<JoinHandle<()>>,
 }
 
 /// Reason why the actor stopped processing commands.
@@ -84,6 +85,7 @@ impl AppActor {
             internal_rx,
             status_store,
             manual_input_stream_override: None,
+            paste_task: None,
         };
         (actor, handle)
     }
@@ -202,12 +204,13 @@ impl AppActor {
                 });
                 self.publish_status();
                 self.hide_overlay().await;
-                spawn_paste_task(
+                self.paste_task = Some(spawn_paste_task(
                     self.internal_tx.clone(),
                     self.pipeline_dependencies(),
                     session_id,
                     text,
-                );
+                    self.paste_task.take(),
+                ));
             }
             InternalEvent::ProcessingFinished {
                 session_id,
@@ -568,9 +571,12 @@ mod tests {
     use glossa_core::{AppStateKind, AudioFormat, CapturedAudio, CommandOrigin, LatencyMode};
 
     use super::*;
-    use crate::ports::{
-        AudioCapture, ClipboardWriter, CuePlayer, NoopTextEnhancer, PasteBackend, SilenceTrimmer,
-        SttClient, TempStore, TrayPort,
+    use crate::{
+        ports::{
+            AudioCapture, ClipboardWriter, CuePlayer, NoopTextEnhancer, PasteBackend,
+            SilenceTrimmer, SttClient, TempStore, TrayPort,
+        },
+        services::recording_pipeline::test_support::SharedSelection,
     };
 
     #[derive(Debug)]
@@ -1338,6 +1344,87 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned"),
             vec![Duration::from_secs(60)]
+        );
+    }
+
+    struct ScriptedSttClient {
+        texts: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl SttClient for ScriptedSttClient {
+        fn provider_name(&self) -> &'static str {
+            "scripted"
+        }
+
+        async fn transcribe(&self, _audio: &CapturedAudio) -> Result<String, AppError> {
+            let mut texts = self.texts.lock().expect("mutex should not be poisoned");
+            Ok(texts.remove(0).to_owned())
+        }
+    }
+
+    async fn toggle_until(handle: &AppHandle, state: AppStateKind) {
+        handle
+            .send(AppCommand::ToggleRecording {
+                origin: CommandOrigin::CliControl,
+            })
+            .expect("toggle command should be sent");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.status().state != state {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("actor should reach the expected state");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hotkey_right_after_paste_should_record_and_keep_the_previous_clipboard() {
+        let selection = Arc::new(SharedSelection::holding("previous"));
+        let deps = AppDependencies {
+            audio_capture: Arc::new(TrackingAudioCapture {
+                lifecycle: Arc::new(RecordingLifecycle::default()),
+            }),
+            trimmer: Arc::new(FakeTrimmer),
+            encoder: Arc::new(FakeTrimmer),
+            cue_player: Arc::new(FakeCuePlayer),
+            stt_client: Arc::new(ScriptedSttClient {
+                texts: Mutex::new(vec!["first", "second"]),
+            }),
+            text_enhancer: Arc::new(NoopTextEnhancer),
+            clipboard: selection.clone(),
+            paste: Arc::new(FakePaste),
+            tray: Arc::new(crate::ports::NullTrayPort),
+            overlay: Arc::new(crate::ports::NullOverlayPort),
+            temp_store: Arc::new(FakeTempStore),
+        };
+        let mut config = AppConfig::default();
+        config.audio.latency_mode = LatencyMode::Off;
+        config.paste.append_space = false;
+        let (actor, handle) = AppActor::new(config, deps);
+        let _status_rx = handle.subscribe();
+
+        let driver = async {
+            toggle_until(&handle, AppStateKind::Recording).await;
+            toggle_until(&handle, AppStateKind::Idle).await;
+            assert_eq!(selection.read(), "first");
+
+            toggle_until(&handle, AppStateKind::Recording).await;
+            toggle_until(&handle, AppStateKind::Idle).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            assert_eq!(selection.read(), "previous");
+
+            handle
+                .send(AppCommand::Shutdown {
+                    origin: CommandOrigin::Internal,
+                })
+                .expect("shutdown command should be sent");
+        };
+
+        let (actor_result, ()) = tokio::join!(actor.run(), driver);
+        assert_eq!(
+            actor_result.expect("actor should shut down cleanly"),
+            ActorExit::Shutdown
         );
     }
 

@@ -1,19 +1,31 @@
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use tokio::{sync::mpsc, task, time::sleep};
+use tokio::{
+    sync::mpsc,
+    task,
+    time::{sleep, timeout},
+};
 use tracing::{info, warn};
 
 use glossa_core::{AppConfig, CapturedAudio, SessionId};
 
 use crate::{
     ports::{
-        AudioEncoder, ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient, TempStore,
-        TextEnhancer,
+        AudioEncoder, ClipboardSnapshot, ClipboardWriter, PasteBackend, SilenceTrimmer, SttClient,
+        TempStore, TextEnhancer,
     },
     AppError,
 };
 
-const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(250);
+// shortcut: a blind timer, because `dotoolc` returns before the keys are pressed and nothing reports
+// the target's read. A target busier than this pastes the previous clipboard; replace the timer if
+// the compositor ever offers a way to observe that read without debug output.
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(1500);
+// shortcut: on GNOME a `wl-copy`/`wl-paste` popup mapped while keys are being pressed may never get
+// keyboard focus and then waits forever. The restore can run while the user types and the next paste
+// waits for it, so retry. Drop this if the clipboard stops depending on focus popups.
+const CLIPBOARD_RESTORE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const CLIPBOARD_RESTORE_ATTEMPTS: u32 = 5;
 
 /// Messages emitted back to the actor from background tasks.
 #[derive(Debug)]
@@ -179,18 +191,30 @@ pub fn spawn_processing_task(
     });
 }
 
+struct PendingRestore {
+    previous: ClipboardSnapshot,
+    pasted_text: String,
+}
+
 /// Spawns the final clipboard + paste phase for a transcription result.
+///
+/// The task sends `PasteFinished` once the keys are sent, then keeps running until the previous
+/// clipboard is restored. Pass its handle to the next call so that paste waits for the restore.
 pub fn spawn_paste_task(
     tx: mpsc::UnboundedSender<InternalEvent>,
     deps: PipelineDependencies,
     session_id: SessionId,
     text: String,
-) {
+    previous_paste: Option<task::JoinHandle<()>>,
+) -> task::JoinHandle<()> {
     task::spawn(async move {
-        let result = paste_cycle(&deps, session_id, &text).await;
-        let outcome = match result {
-            Ok(outcome) => outcome,
-            Err(error) => CycleOutcome::Failed(error.to_string()),
+        if let Some(previous_paste) = previous_paste {
+            let _ = previous_paste.await;
+        }
+
+        let (outcome, pending_restore) = match paste_cycle(&deps, session_id, &text).await {
+            Ok(pasted) => pasted,
+            Err(error) => (CycleOutcome::Failed(error.to_string()), None),
         };
 
         let _ = deps.temp_store.cleanup_session(session_id).await;
@@ -198,14 +222,20 @@ pub fn spawn_paste_task(
             session_id,
             outcome,
         });
-    });
+
+        if let Some(pending_restore) = pending_restore {
+            if let Err(error) = restore_after_paste(&deps, session_id, pending_restore).await {
+                warn!(%session_id, %error, "failed to restore previous clipboard");
+            }
+        }
+    })
 }
 
 async fn paste_cycle(
     deps: &PipelineDependencies,
     session_id: SessionId,
     text: &str,
-) -> Result<CycleOutcome, AppError> {
+) -> Result<(CycleOutcome, Option<PendingRestore>), AppError> {
     let mut warnings = Vec::new();
     let previous_clipboard = match deps.clipboard.snapshot().await {
         Ok(snapshot) => snapshot,
@@ -236,24 +266,47 @@ async fn paste_cycle(
     );
     match deps.paste.paste(deps.config.paste.mode).await {
         Ok(()) => {
-            if let Some(snapshot) = previous_clipboard {
-                // The paste backend only confirms that key events were sent; the target app
-                // may consume the clipboard shortly after handling those events.
-                sleep(CLIPBOARD_RESTORE_DELAY).await;
-                if let Err(error) = deps.clipboard.restore(snapshot).await {
-                    warnings.push(format!(
-                        "failed to restore previous clipboard for session {session_id}: {error}"
-                    ));
-                }
-            }
-            Ok(warning_outcome(warnings))
+            let pending_restore = previous_clipboard.map(|previous| PendingRestore {
+                previous,
+                pasted_text: clipboard_text.into_owned(),
+            });
+            Ok((warning_outcome(warnings), pending_restore))
         }
         Err(error) => {
             warnings.push(format!(
                 "paste failed after clipboard write for session {session_id}: {error}"
             ));
-            Ok(warning_outcome(warnings))
+            Ok((warning_outcome(warnings), None))
         }
+    }
+}
+
+async fn restore_after_paste(
+    deps: &PipelineDependencies,
+    session_id: SessionId,
+    pending: PendingRestore,
+) -> Result<(), AppError> {
+    sleep(CLIPBOARD_RESTORE_DELAY).await;
+    for _ in 0..CLIPBOARD_RESTORE_ATTEMPTS {
+        let attempt = restore_if_unchanged(deps, session_id, &pending);
+        if let Ok(result) = timeout(CLIPBOARD_RESTORE_ATTEMPT_TIMEOUT, attempt).await {
+            return result;
+        }
+        info!(%session_id, "clipboard restore attempt timed out");
+    }
+    Err(AppError::message("clipboard restore timed out"))
+}
+
+async fn restore_if_unchanged(
+    deps: &PipelineDependencies,
+    session_id: SessionId,
+    pending: &PendingRestore,
+) -> Result<(), AppError> {
+    if deps.clipboard.holds_text(&pending.pasted_text).await? {
+        deps.clipboard.restore(pending.previous.clone()).await
+    } else {
+        info!(%session_id, "clipboard changed after paste; keeping it");
+        Ok(())
     }
 }
 
@@ -266,10 +319,81 @@ fn warning_outcome(warnings: Vec<String>) -> CycleOutcome {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
+    use crate::{
+        ports::{ClipboardSnapshot, ClipboardWriter},
+        AppError,
+    };
+
+    pub(crate) struct SharedSelection {
+        current: Mutex<Vec<u8>>,
+        hung_checks_left: Mutex<u32>,
+    }
+
+    impl SharedSelection {
+        pub(crate) fn holding(text: &str) -> Self {
+            Self {
+                current: Mutex::new(text.as_bytes().to_vec()),
+                hung_checks_left: Mutex::new(0),
+            }
+        }
+
+        pub(crate) fn hang_next_checks(&self, count: u32) {
+            *self.hung_checks_left.lock().expect("selection lock") = count;
+        }
+
+        pub(crate) fn read(&self) -> String {
+            String::from_utf8_lossy(&self.current.lock().expect("selection lock")).into_owned()
+        }
+
+        pub(crate) fn copy(&self, text: &str) {
+            *self.current.lock().expect("selection lock") = text.as_bytes().to_vec();
+        }
+    }
+
+    #[async_trait]
+    impl ClipboardWriter for SharedSelection {
+        async fn snapshot(&self) -> Result<Option<ClipboardSnapshot>, AppError> {
+            Ok(Some(ClipboardSnapshot::new(
+                "text/plain;charset=utf-8".to_owned(),
+                self.read().into_bytes(),
+            )))
+        }
+
+        async fn set_text(&self, text: &str) -> Result<(), AppError> {
+            self.copy(text);
+            Ok(())
+        }
+
+        async fn holds_text(&self, text: &str) -> Result<bool, AppError> {
+            let hangs = {
+                let mut left = self.hung_checks_left.lock().expect("selection lock");
+                let hangs = *left > 0;
+                *left = left.saturating_sub(1);
+                hangs
+            };
+            if hangs {
+                std::future::pending::<()>().await;
+            }
+            Ok(self.read() == text)
+        }
+
+        async fn restore(&self, snapshot: ClipboardSnapshot) -> Result<(), AppError> {
+            *self.current.lock().expect("selection lock") = snapshot.bytes;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         sync::{Arc, Mutex},
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -278,7 +402,8 @@ mod tests {
     use glossa_core::{AudioFormat, CapturedAudio, PasteMode, SessionId};
 
     use super::{
-        paste_cycle, spawn_processing_task, CycleOutcome, InternalEvent, PipelineDependencies,
+        paste_cycle, restore_after_paste, spawn_paste_task, spawn_processing_task,
+        test_support::SharedSelection, CycleOutcome, InternalEvent, PipelineDependencies,
     };
     use crate::{
         ports::{
@@ -292,6 +417,7 @@ mod tests {
         text: Mutex<Vec<String>>,
         restores: Mutex<Vec<ClipboardSnapshot>>,
         snapshot: Mutex<Result<Option<ClipboardSnapshot>, String>>,
+        holds_text_result: Mutex<Result<bool, String>>,
         restore_result: Mutex<Result<(), String>>,
     }
 
@@ -304,6 +430,7 @@ mod tests {
                     "text/plain;charset=utf-8".to_owned(),
                     b"previous".to_vec(),
                 )))),
+                holds_text_result: Mutex::new(Ok(true)),
                 restore_result: Mutex::new(Ok(())),
             }
         }
@@ -314,6 +441,10 @@ mod tests {
 
         fn restored(&self) -> Vec<ClipboardSnapshot> {
             self.restores.lock().expect("clipboard lock").clone()
+        }
+
+        fn fail_holds_text(&self, message: impl Into<String>) {
+            *self.holds_text_result.lock().expect("clipboard lock") = Err(message.into());
         }
 
         fn fail_restore(&self, message: impl Into<String>) {
@@ -337,6 +468,14 @@ mod tests {
                 .expect("clipboard lock")
                 .push(text.to_owned());
             Ok(())
+        }
+
+        async fn holds_text(&self, _text: &str) -> Result<bool, AppError> {
+            self.holds_text_result
+                .lock()
+                .expect("clipboard lock")
+                .clone()
+                .map_err(AppError::message)
         }
 
         async fn restore(&self, snapshot: ClipboardSnapshot) -> Result<(), AppError> {
@@ -469,14 +608,28 @@ mod tests {
         )
     }
 
-    #[tokio::test]
+    async fn paste_and_restore(
+        deps: &PipelineDependencies,
+        session_id: SessionId,
+        text: &str,
+    ) -> CycleOutcome {
+        let (outcome, pending_restore) = paste_cycle(deps, session_id, text)
+            .await
+            .expect("paste cycle should succeed");
+        if let Some(pending_restore) = pending_restore {
+            restore_after_paste(deps, session_id, pending_restore)
+                .await
+                .expect("clipboard restore should succeed");
+        }
+        outcome
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn paste_cycle_should_append_a_space_before_writing_to_clipboard_when_enabled() {
         let (deps, clipboard, paste) = test_dependencies(true);
         let session_id = SessionId::new();
 
-        let outcome = paste_cycle(&deps, session_id, "hello")
-            .await
-            .expect("paste cycle should succeed");
+        let outcome = paste_and_restore(&deps, session_id, "hello").await;
 
         assert!(matches!(outcome, CycleOutcome::Completed));
         assert_eq!(clipboard.recorded(), vec!["hello ".to_owned()]);
@@ -490,14 +643,12 @@ mod tests {
         assert_eq!(paste.recorded(), vec![PasteMode::CtrlV]);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn paste_cycle_should_leave_text_unchanged_when_append_space_is_disabled() {
         let (deps, clipboard, paste) = test_dependencies(false);
         let session_id = SessionId::new();
 
-        let outcome = paste_cycle(&deps, session_id, "hello")
-            .await
-            .expect("paste cycle should succeed");
+        let outcome = paste_and_restore(&deps, session_id, "hello").await;
 
         assert!(matches!(outcome, CycleOutcome::Completed));
         assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
@@ -517,26 +668,30 @@ mod tests {
         paste.fail("paste command failed");
         let session_id = SessionId::new();
 
-        let outcome = paste_cycle(&deps, session_id, "hello")
-            .await
-            .expect("paste cycle should succeed with warning");
+        let outcome = paste_and_restore(&deps, session_id, "hello").await;
 
         assert!(matches!(outcome, CycleOutcome::CompletedWithWarning(_)));
         assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
         assert!(clipboard.restored().is_empty());
     }
 
-    #[tokio::test]
-    async fn paste_cycle_should_warn_when_clipboard_restore_fails() {
+    #[tokio::test(start_paused = true)]
+    async fn restore_after_paste_should_report_a_failed_clipboard_restore() {
         let (deps, clipboard, _paste) = test_dependencies(false);
         clipboard.fail_restore("restore failed");
         let session_id = SessionId::new();
 
-        let outcome = paste_cycle(&deps, session_id, "hello")
+        let (_outcome, pending_restore) = paste_cycle(&deps, session_id, "hello")
             .await
-            .expect("paste cycle should succeed with warning");
+            .expect("paste cycle should succeed");
+        let restored = restore_after_paste(
+            &deps,
+            session_id,
+            pending_restore.expect("previous clipboard should be pending"),
+        )
+        .await;
 
-        assert!(matches!(outcome, CycleOutcome::CompletedWithWarning(_)));
+        assert!(restored.is_err());
         assert_eq!(clipboard.recorded(), vec!["hello".to_owned()]);
         assert_eq!(
             clipboard.restored(),
@@ -547,28 +702,185 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn paste_cycle_should_wait_briefly_before_restoring_clipboard_after_paste() {
+    #[tokio::test(start_paused = true)]
+    async fn restore_after_paste_should_not_overwrite_a_clipboard_it_cannot_read() {
         let (deps, clipboard, _paste) = test_dependencies(false);
+        clipboard.fail_holds_text("read failed");
         let session_id = SessionId::new();
-        let started = Instant::now();
 
-        let outcome = paste_cycle(&deps, session_id, "hello")
+        let (_outcome, pending_restore) = paste_cycle(&deps, session_id, "hello")
             .await
             .expect("paste cycle should succeed");
+        let restored = restore_after_paste(
+            &deps,
+            session_id,
+            pending_restore.expect("previous clipboard should be pending"),
+        )
+        .await;
 
-        assert!(matches!(outcome, CycleOutcome::Completed));
-        assert!(
-            started.elapsed() >= Duration::from_millis(100),
-            "clipboard restore should be delayed long enough for the target app to consume the paste"
-        );
+        assert!(restored.is_err());
+        assert!(clipboard.restored().is_empty());
+    }
+
+    struct LateReadingTarget {
+        selection: Arc<SharedSelection>,
+        reads_after: Duration,
+        pasted: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl PasteBackend for LateReadingTarget {
+        async fn paste(&self, _mode: PasteMode) -> Result<(), AppError> {
+            let selection = Arc::clone(&self.selection);
+            let pasted = Arc::clone(&self.pasted);
+            let reads_after = self.reads_after;
+            tokio::spawn(async move {
+                tokio::time::sleep(reads_after).await;
+                pasted.lock().expect("pasted lock").push(selection.read());
+            });
+            Ok(())
+        }
+    }
+
+    fn live_dependencies(
+        previous: &str,
+        target_reads_after: Duration,
+    ) -> (
+        PipelineDependencies,
+        Arc<SharedSelection>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
+        let selection = Arc::new(SharedSelection::holding(previous));
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        let mut config = glossa_core::AppConfig::default();
+        config.paste.append_space = false;
+
+        (
+            PipelineDependencies {
+                config: Arc::new(config),
+                trimmer: Arc::new(NoopTrimmer),
+                encoder: Arc::new(NoopTrimmer),
+                stt_client: Arc::new(NoopSttClient),
+                text_enhancer: Arc::new(crate::ports::NoopTextEnhancer),
+                clipboard: selection.clone(),
+                paste: Arc::new(LateReadingTarget {
+                    selection: selection.clone(),
+                    reads_after: target_reads_after,
+                    pasted: pasted.clone(),
+                }),
+                temp_store: Arc::new(NoopTempStore),
+            },
+            selection,
+            pasted,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn slow_target_should_paste_the_transcription_instead_of_the_previous_clipboard() {
+        let (deps, selection, pasted) = live_dependencies("previous", Duration::from_secs(1));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        spawn_paste_task(tx, deps, SessionId::new(), "hello".to_owned(), None);
+        rx.recv().await.expect("paste should finish");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
         assert_eq!(
-            clipboard.restored(),
-            vec![ClipboardSnapshot::new(
-                "text/plain;charset=utf-8".to_owned(),
-                b"previous".to_vec(),
-            )]
+            *pasted.lock().expect("pasted lock"),
+            vec!["hello".to_owned()]
         );
+        assert_eq!(selection.read(), "previous");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn paste_finished_should_not_wait_for_the_clipboard_restore() {
+        let (deps, selection, _pasted) = live_dependencies("previous", Duration::ZERO);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        spawn_paste_task(tx, deps, SessionId::new(), "hello".to_owned(), None);
+        let event = rx.recv().await.expect("paste should finish");
+
+        assert!(matches!(event, InternalEvent::PasteFinished { .. }));
+        assert_eq!(selection.read(), "hello");
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(selection.read(), "previous");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_paste_should_wait_for_the_pending_clipboard_restore() {
+        let (deps, selection, pasted) = live_dependencies("previous", Duration::from_secs(1));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let first = spawn_paste_task(
+            tx.clone(),
+            deps.clone(),
+            SessionId::new(),
+            "first".to_owned(),
+            None,
+        );
+        rx.recv().await.expect("first paste should finish");
+        spawn_paste_task(tx, deps, SessionId::new(), "second".to_owned(), Some(first));
+        rx.recv().await.expect("second paste should finish");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        assert_eq!(
+            *pasted.lock().expect("pasted lock"),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
+        assert_eq!(selection.read(), "previous");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clipboard_restore_should_retry_after_a_hung_clipboard_command() {
+        let (deps, selection, _pasted) = live_dependencies("previous", Duration::ZERO);
+        selection.hang_next_checks(2);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        spawn_paste_task(tx, deps, SessionId::new(), "hello".to_owned(), None);
+        rx.recv().await.expect("paste should finish");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        assert_eq!(selection.read(), "previous");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_paste_should_survive_a_clipboard_restore_that_never_finishes() {
+        let (deps, selection, pasted) = live_dependencies("previous", Duration::ZERO);
+        selection.hang_next_checks(u32::MAX);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let first = spawn_paste_task(
+            tx.clone(),
+            deps.clone(),
+            SessionId::new(),
+            "first".to_owned(),
+            None,
+        );
+        rx.recv().await.expect("first paste should finish");
+        spawn_paste_task(tx, deps, SessionId::new(), "second".to_owned(), Some(first));
+        tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .expect("second paste should not wait forever")
+            .expect("second paste should finish");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert_eq!(
+            *pasted.lock().expect("pasted lock"),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clipboard_restore_should_keep_text_copied_after_the_paste() {
+        let (deps, selection, _pasted) = live_dependencies("previous", Duration::ZERO);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        spawn_paste_task(tx, deps, SessionId::new(), "hello".to_owned(), None);
+        rx.recv().await.expect("paste should finish");
+        selection.copy("copied by the user");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        assert_eq!(selection.read(), "copied by the user");
     }
 
     struct RecordingTextEnhancer {

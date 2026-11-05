@@ -266,6 +266,12 @@ All platform-specific code lives behind traits in `glossa-app::ports`. The app l
 
 The tray **must** live on its own thread because GTK requires owning the event loop. The recording pill runs GTK in the hidden `glossa overlay-helper` subprocess; only that child receives `GDK_BACKEND=x11`. Microphone levels cross a private Unix socket; the child cannot read the daemon's atomic meter. Hide/drop kills and reaps the helper.
 
+### Clipboard Restore After Paste
+
+`PasteFinished` is sent as soon as the paste keys are handed to the backend, so the hotkey works again right away. The same paste task then restores the previous clipboard after `CLIPBOARD_RESTORE_DELAY`, unless the clipboard no longer holds the pasted text; the next paste awaits that task. The timer is deliberately long: `dotoolc` returns before the keys are pressed and nothing reports the target's read, so a target that reads after the restore pastes the old text.
+
+Mutter has no data-control protocol. Every `wl-copy`/`wl-paste` maps a popup that steals keyboard focus. A popup mapped while keys are being pressed may never get focus, and then the command hangs forever. Clipboard calls that can run while the user types need a timeout plus `kill_on_drop`, and each extra call costs a focus change in the target app.
+
 ### Daemon Restart Loop
 
 The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit::Restart` (e.g., after tray shortcut change), it reloads config, rebuilds the actor, and re-enters the loop. The tray (`BestEffortTrayPort`) is created once and survives restarts — only its command sender is rebound. The overlay is rebuilt inside the restart loop so changed `ui.overlay` settings apply.

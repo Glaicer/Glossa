@@ -25,6 +25,10 @@ pub trait ClipboardWriter: Send + Sync {
 
     async fn set_text(&self, text: &str) -> Result<(), AppError>;
 
+    async fn holds_text(&self, _text: &str) -> Result<bool, AppError> {
+        Ok(true)
+    }
+
     async fn restore(&self, _snapshot: ClipboardSnapshot) -> Result<(), AppError> {
         Ok(())
     }
