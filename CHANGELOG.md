@@ -5,6 +5,22 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-11-05
+
+### Fixed
+
+- **Glossa could paste the previous clipboard contents instead of the transcription, and the transcription ended up second in clipboard history.** The previous clipboard was restored on a 250 ms timer that started before the paste keys were pressed, so an app that read the clipboard late, such as a browser tab busy with a heavy page, received the old text. The restore now waits 1.5 seconds.
+
+### Changed
+
+- The hotkey works again as soon as the paste keys are sent, while the restore finishes in the background. A new paste waits for that restore to finish first.
+- The previous clipboard is not restored if the clipboard no longer holds the pasted text, so anything you copy right after a paste is kept.
+- A clipboard command that hangs during the restore is stopped and retried, so it cannot block later pastes.
+
+### Notes
+
+- An app that stays busy for more than 1.5 seconds after the paste keys can still receive the old text.
+
 ## [1.8.0] - 2026-10-15
 
 Glossa can now transcribe audio files from the tray menu. Choose a file, run transcription, and copy the result when you need it. The window uses your current speech-to-text provider and applies the LLM enhancer if it is enabled.
@@ -217,6 +233,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.8.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.0
 [1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.6.0
