@@ -35,7 +35,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "=0.3.19", features = ["env-filter", "fmt"] }
 uuid = { version = "=1.11.0", features = ["serde", "v4"] }
 ashpd = { version = "=0.8.2", default-features = false, features = ["tokio"] }
-tray-icon = "=0.17.0"
+tray-icon = { version = "=0.17.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

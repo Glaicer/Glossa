@@ -197,7 +197,7 @@ confirm_continue() {
   log
   log "This script will:"
   log "- verify that you are running GNOME on Wayland"
-  log "- install runtime dependencies such as wl-clipboard, libnotify, AppIndicator, libxdo, and dotool if missing"
+  log "- install runtime dependencies such as wl-clipboard, libnotify, AppIndicator, and dotool if missing"
   log "- download the latest Glossa release bundle from GitHub"
   log "- create ~/.config/glossa/config.toml and systemd user services"
   log
@@ -357,18 +357,6 @@ ensure_appindicator_runtime() {
     || die "AppIndicator runtime library is still unavailable after installing it."
 }
 
-ensure_libxdo3() {
-  if ldconfig -p 2>/dev/null | grep -q 'libxdo.so.3'; then
-    return 0
-  fi
-
-  log "libxdo3 was not found. Installing it."
-  install_system_packages "$(package_name_for_distro libxdo3 libxdo)"
-
-  ldconfig -p 2>/dev/null | grep -q 'libxdo.so.3' \
-    || die "libxdo3 is still unavailable after installing it."
-}
-
 dotool_bundle_ready() {
   command -v dotool >/dev/null 2>&1 \
     && command -v dotoold >/dev/null 2>&1 \
@@ -478,7 +466,7 @@ download_and_install_glossa() {
   ensure_dotool_bundle
   install_glossa_bundle "${glossa_bundle_dir}"
   "${glossa_path}" --help >/dev/null 2>&1 \
-    || die "The installed Glossa binary could not start. Ensure required runtime libraries such as libxdo3 are installed."
+    || die "The installed Glossa binary could not start. Ensure required runtime libraries such as GTK3 are installed."
 }
 
 prompt_backend() {
@@ -919,7 +907,6 @@ main() {
   ensure_ffmpeg
   ensure_notify_send
   ensure_appindicator_runtime
-  ensure_libxdo3
   download_and_install_glossa
   maybe_generate_config
   "${glossa_path}" --config "${CONFIG_PATH}" migrate-secrets \

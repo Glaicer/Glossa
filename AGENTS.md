@@ -288,7 +288,7 @@ The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit:
 | Audio playback | `rodio` 0.19 | Cue sounds only |
 | STT HTTP | `reqwest` 0.12 | rustls-tls, multipart uploads |
 | Portal shortcuts | `ashpd` 0.8 | DBus GlobalShortcuts interface |
-| Tray icon | `tray-icon` 0.17 | GTK/AppIndicator on Linux |
+| Tray icon | `tray-icon` 0.17 | GTK/AppIndicator on Linux. `default-features = false` keeps libxdo out: its soname differs between distros (Fedora 45 `.so.4`, Ubuntu `.so.3`), so one release binary cannot link it. It only backs predefined Copy/Cut/Paste/SelectAll menu items, which Glossa does not use. |
 | GTK | `gtk` 0.18 | Tray thread event loop + shortcut capture dialog |
 | Config | `toml` 0.8 + `serde` 1.0 | TOML config with validation |
 | CLI | `clap` 4.5 | Derive-based subcommands |

@@ -172,7 +172,7 @@ tar -xzf glossa-linux-x86_64.tar.gz
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y wl-clipboard libnotify-bin libxdo3 ffmpeg
+sudo apt-get install -y wl-clipboard libnotify-bin ffmpeg
 ```
 
 5. Install the bundled `dotool` payload and udev rule:

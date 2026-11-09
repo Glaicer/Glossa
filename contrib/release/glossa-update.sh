@@ -156,7 +156,7 @@ install_glossa_bundle() {
   install -m644 "${version_source}" "${INSTALLED_VERSION_PATH}"
 
   "${INSTALLED_GLOSSA_PATH}" --help >/dev/null 2>&1 \
-    || die "The installed Glossa binary could not start. Ensure required runtime libraries such as libxdo3 are installed."
+    || die "The installed Glossa binary could not start. Ensure required runtime libraries such as GTK3 are installed."
 }
 
 download_and_extract_glossa_bundle() {
