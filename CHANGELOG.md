@@ -5,6 +5,16 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-11-09
+
+### Fixed
+
+- **Glossa failed to start on Fedora 45 and restarted in a loop with `libxdo.so.3: cannot open shared object file`.** Fedora 45 ships libxdo as `libxdo.so.4`, while the release binary required `libxdo.so.3`. Glossa no longer depends on libxdo, so the same binary runs on Fedora 44, Fedora 45, and Ubuntu.
+
+### Changed
+
+- The installer no longer installs libxdo.
+
 ## [1.8.1] - 2026-11-05
 
 ### Fixed
@@ -233,6 +243,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.8.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.2
 [1.8.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.0
 [1.7.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.7.0
