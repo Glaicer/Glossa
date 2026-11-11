@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -45,11 +46,14 @@ pub fn init_tracing(config: &AppConfig) -> anyhow::Result<()> {
         LogLevel::Warn => "warn",
         LogLevel::Error => "error",
     };
-    let subscriber = tracing_subscriber::fmt()
+    let mut builder = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(filter))
-        .with_target(true)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)
+        .with_target(true);
+    // why: with_ansi(true) would override the builder's NO_COLOR check, so only ever force it off.
+    if !std::io::stdout().is_terminal() {
+        builder = builder.with_ansi(false);
+    }
+    tracing::subscriber::set_global_default(builder.finish())
         .map_err(|error| anyhow!("failed to initialize tracing: {error}"))
 }
 
