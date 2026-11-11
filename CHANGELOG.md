@@ -5,6 +5,13 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-11-11
+
+### Fixed
+
+- **After an audio device error, Glossa wrote the same log line about 40,000 times a minute and never recovered.** The line was `` an error occurred on output stream: A backend-specific error has occurred: `alsa::poll()` returned POLLERR ``. The flood made journald drop logs from every other user service, and cue sounds stayed broken until the service was restarted. Glossa now logs the first error once, closes the broken stream, and reopens it in the background, waiting longer between attempts up to 30 seconds. This applies to cue sounds and to the microphone stream kept open between recordings.
+- A cue sound on a broken output device can no longer stop a recording from ending.
+
 ## [1.8.2] - 2026-11-09
 
 ### Fixed
@@ -243,6 +250,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.8.3]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.3
 [1.8.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.2
 [1.8.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.0
