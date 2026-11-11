@@ -27,6 +27,9 @@ const FIRST_INPUT_BUFFER_TIMEOUT: Duration = Duration::from_secs(2);
 const KEEPALIVE_FIRST_INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(6);
 const LOW_LATENCY_BUFFER_FRAMES: [u32; 2] = [512, 1024];
+const KEEPALIVE_REOPEN_BACKOFF_INITIAL: Duration = Duration::from_millis(500);
+const KEEPALIVE_REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(30);
+const KEEPALIVE_HEALTHY_AFTER: Duration = Duration::from_secs(30);
 
 /// Audio capture backed by the system default input device through CPAL.
 #[derive(Clone)]
@@ -126,7 +129,7 @@ impl AudioCapture for CpalAudioCapture {
             .map_err(|error| AppError::message(format!("failed to start audio stream: {error}")))?;
         let stream_play_ms = play_started_at.elapsed().as_millis();
         // `cpal::Stream` is not Send, so the readiness wait cannot cross an await.
-        let first_input_buffer_ms = match wait_for_first_input_buffer(first_input_rx) {
+        let first_input_buffer_ms = match wait_for_first_input_buffer(&first_input_rx) {
             Ok(ms) => ms,
             Err(error) => {
                 let _ = stream.pause();
@@ -279,7 +282,12 @@ fn build_stream(
     tx: SyncSender<Vec<i16>>,
     first_input_notifier: FirstInputBufferNotifier,
 ) -> Result<cpal::Stream, String> {
-    let error_callback = |error| tracing::error!(error = %error, "audio stream error");
+    let error_callback = first_error_only(|error: cpal::StreamError| {
+        tracing::error!(
+            error = %error,
+            "audio stream error; later errors on this stream are suppressed"
+        );
+    });
 
     match sample_format {
         SampleFormat::F32 => device
@@ -435,16 +443,24 @@ fn spawn_input_keepalive() -> Result<Arc<dyn IdleInputStream>, AppError> {
     Ok(stream)
 }
 
+#[derive(Debug)]
+enum KeepaliveMessage {
+    StreamFailed { generation: u64, error: String },
+    Shutdown,
+}
+
 struct InputKeepalive {
-    shutdown_tx: Mutex<Option<mpsc::Sender<()>>>,
+    shutdown_tx: Mutex<Option<mpsc::Sender<KeepaliveMessage>>>,
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl InputKeepalive {
     fn spawn() -> Result<Self, String> {
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let (shutdown_tx, messages_rx) = mpsc::channel();
+        let failure_tx = shutdown_tx.clone();
         let (startup_tx, startup_rx) = mpsc::sync_channel(1);
-        let thread_handle = thread::spawn(move || run_input_keepalive(shutdown_rx, startup_tx));
+        let thread_handle =
+            thread::spawn(move || run_input_keepalive(&messages_rx, failure_tx, startup_tx));
 
         match startup_rx.recv_timeout(KEEPALIVE_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
@@ -456,7 +472,7 @@ impl InputKeepalive {
                 Err(error)
             }
             Err(RecvTimeoutError::Timeout) => {
-                let _ = shutdown_tx.send(());
+                let _ = shutdown_tx.send(KeepaliveMessage::Shutdown);
                 Err(format!(
                     "audio input keepalive stream did not start within {} ms",
                     KEEPALIVE_STARTUP_TIMEOUT.as_millis()
@@ -474,7 +490,7 @@ impl Drop for InputKeepalive {
     fn drop(&mut self) {
         if let Ok(mut shutdown_tx) = self.shutdown_tx.lock() {
             if let Some(shutdown_tx) = shutdown_tx.take() {
-                let _ = shutdown_tx.send(());
+                let _ = shutdown_tx.send(KeepaliveMessage::Shutdown);
             }
         }
 
@@ -487,19 +503,28 @@ impl Drop for InputKeepalive {
 }
 
 struct InputKeepaliveStream {
-    stream: cpal::Stream,
+    _stream: cpal::Stream,
     device_name: String,
     config: StreamConfig,
-    first_input_buffer_ms: u128,
+    first_input_rx: mpsc::Receiver<()>,
 }
 
 fn run_input_keepalive(
-    shutdown_rx: mpsc::Receiver<()>,
+    messages_rx: &mpsc::Receiver<KeepaliveMessage>,
+    failure_tx: mpsc::Sender<KeepaliveMessage>,
     startup_tx: SyncSender<Result<(), String>>,
 ) {
     let startup_started_at = Instant::now();
-    let stream = match open_input_keepalive_stream() {
-        Ok(stream) => stream,
+    let opened = open_input_keepalive_stream(&failure_tx, 0).and_then(|stream| {
+        let first_input_buffer_ms = wait_for_first_input_buffer_with_timeout(
+            &stream.first_input_rx,
+            KEEPALIVE_FIRST_INPUT_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok((stream, first_input_buffer_ms))
+    });
+    let (stream, first_input_buffer_ms) = match opened {
+        Ok(opened) => opened,
         Err(error) => {
             let _ = startup_tx.send(Err(error));
             return;
@@ -510,17 +535,93 @@ fn run_input_keepalive(
         sample_rate_hz = stream.config.sample_rate.0,
         channels = stream.config.channels,
         buffer_size = %buffer_size_label(&stream.config.buffer_size),
-        first_input_buffer_ms = stream.first_input_buffer_ms,
+        first_input_buffer_ms,
         startup_ms = startup_started_at.elapsed().as_millis(),
         "audio input keepalive stream initialized"
     );
     let _ = startup_tx.send(Ok(()));
 
-    let _stream = stream.stream;
-    let _ = shutdown_rx.recv();
+    run_keepalive_loop(messages_rx, stream, |generation| {
+        open_input_keepalive_stream(&failure_tx, generation)
+    });
 }
 
-fn open_input_keepalive_stream() -> Result<InputKeepaliveStream, String> {
+fn run_keepalive_loop<S>(
+    messages_rx: &mpsc::Receiver<KeepaliveMessage>,
+    initial_stream: S,
+    mut open: impl FnMut(u64) -> Result<S, String>,
+) {
+    let mut stream = Some(initial_stream);
+    let mut generation = 0_u64;
+    let mut backoff = KEEPALIVE_REOPEN_BACKOFF_INITIAL;
+    let mut failures = 0_u32;
+
+    loop {
+        let wait = if stream.is_none() {
+            Some(backoff)
+        } else if failures > 0 {
+            Some(KEEPALIVE_HEALTHY_AFTER)
+        } else {
+            None
+        };
+        let message = match wait {
+            None => messages_rx.recv().unwrap_or(KeepaliveMessage::Shutdown),
+            Some(timeout) => match messages_rx.recv_timeout(timeout) {
+                Ok(message) => message,
+                Err(RecvTimeoutError::Disconnected) => KeepaliveMessage::Shutdown,
+                Err(RecvTimeoutError::Timeout) if stream.is_some() => {
+                    tracing::info!(failures, "audio input keepalive stream recovered");
+                    failures = 0;
+                    backoff = KEEPALIVE_REOPEN_BACKOFF_INITIAL;
+                    continue;
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    generation += 1;
+                    match open(generation) {
+                        Ok(reopened) => {
+                            tracing::debug!("audio input keepalive stream reopened");
+                            stream = Some(reopened);
+                        }
+                        Err(error) => {
+                            tracing::debug!(error, "audio input keepalive stream reopen failed");
+                            failures += 1;
+                            backoff = (backoff * 2).min(KEEPALIVE_REOPEN_BACKOFF_MAX);
+                        }
+                    }
+                    continue;
+                }
+            },
+        };
+
+        match message {
+            KeepaliveMessage::Shutdown => break,
+            KeepaliveMessage::StreamFailed {
+                generation: failed_generation,
+                error,
+            } => {
+                if failed_generation != generation || stream.is_none() {
+                    continue;
+                }
+                stream = None;
+                if failures == 0 {
+                    tracing::warn!(
+                        error,
+                        "audio input keepalive stream failed; closing it and reopening in the background"
+                    );
+                } else {
+                    tracing::debug!(error, "audio input keepalive stream failed again");
+                }
+                failures += 1;
+                backoff = (backoff * 2).min(KEEPALIVE_REOPEN_BACKOFF_MAX);
+            }
+        }
+    }
+}
+
+fn open_input_keepalive_stream(
+    failure_tx: &mpsc::Sender<KeepaliveMessage>,
+    generation: u64,
+) -> Result<InputKeepaliveStream, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -538,19 +639,18 @@ fn open_input_keepalive_stream() -> Result<InputKeepaliveStream, String> {
         default_config.sample_format(),
         &default_config.config(),
         first_input_notifier,
+        failure_tx,
+        generation,
     )?;
     stream
         .play()
         .map_err(|error| format!("failed to start audio input keepalive stream: {error}"))?;
-    let first_input_buffer_ms =
-        wait_for_first_input_buffer_with_timeout(first_input_rx, KEEPALIVE_FIRST_INPUT_TIMEOUT)
-            .map_err(|error| error.to_string())?;
 
     Ok(InputKeepaliveStream {
-        stream,
+        _stream: stream,
         device_name,
         config,
-        first_input_buffer_ms,
+        first_input_rx,
     })
 }
 
@@ -559,11 +659,19 @@ fn build_preferred_discard_stream(
     sample_format: SampleFormat,
     base_config: &StreamConfig,
     first_input_notifier: FirstInputBufferNotifier,
+    failure_tx: &mpsc::Sender<KeepaliveMessage>,
+    generation: u64,
 ) -> Result<(cpal::Stream, StreamConfig), String> {
     let mut errors = Vec::new();
 
     for config in input_config_candidates(base_config) {
-        match build_discard_stream(device, sample_format, &config, first_input_notifier.clone()) {
+        match build_discard_stream(
+            device,
+            sample_format,
+            &config,
+            first_input_notifier.clone(),
+            keepalive_error_callback(failure_tx.clone(), generation),
+        ) {
             Ok(stream) => return Ok((stream, config)),
             Err(error) => {
                 tracing::debug!(
@@ -595,9 +703,8 @@ fn build_discard_stream(
     sample_format: SampleFormat,
     config: &StreamConfig,
     first_input_notifier: FirstInputBufferNotifier,
+    error_callback: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<cpal::Stream, String> {
-    let error_callback = |error| tracing::error!(error = %error, "audio input keepalive error");
-
     match sample_format {
         SampleFormat::F32 => device
             .build_input_stream(
@@ -624,6 +731,32 @@ fn build_discard_stream(
             )
             .map_err(|error| format!("failed to build u16 input keepalive stream: {error}")),
         _ => Err("unsupported input sample format".into()),
+    }
+}
+
+fn keepalive_error_callback(
+    failure_tx: mpsc::Sender<KeepaliveMessage>,
+    generation: u64,
+) -> impl FnMut(cpal::StreamError) + Send + 'static {
+    first_error_only(move |error: cpal::StreamError| {
+        let _ = failure_tx.send(KeepaliveMessage::StreamFailed {
+            generation,
+            error: error.to_string(),
+        });
+    })
+}
+
+// why: cpal 0.15 ALSA calls the error callback in a tight loop after POLLERR without
+// recovering, so only the first error per stream may log or wake anyone.
+fn first_error_only<E>(
+    mut on_first: impl FnMut(E) + Send + 'static,
+) -> impl FnMut(E) + Send + 'static {
+    let mut reported = false;
+    move |error| {
+        if !reported {
+            reported = true;
+            on_first(error);
+        }
     }
 }
 
@@ -661,12 +794,12 @@ impl FirstInputBufferNotifier {
     }
 }
 
-fn wait_for_first_input_buffer(rx: mpsc::Receiver<()>) -> Result<u128, AppError> {
+fn wait_for_first_input_buffer(rx: &mpsc::Receiver<()>) -> Result<u128, AppError> {
     wait_for_first_input_buffer_with_timeout(rx, FIRST_INPUT_BUFFER_TIMEOUT)
 }
 
 fn wait_for_first_input_buffer_with_timeout(
-    rx: mpsc::Receiver<()>,
+    rx: &mpsc::Receiver<()>,
     timeout: Duration,
 ) -> Result<u128, AppError> {
     let wait_started_at = Instant::now();
@@ -823,6 +956,121 @@ mod tests {
 
         assert!(!controller.is_active());
         assert_eq!(dropped.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    fn pollerr() -> cpal::StreamError {
+        cpal::StreamError::BackendSpecific {
+            err: cpal::BackendSpecificError {
+                description: "`alsa::poll()` returned POLLERR".into(),
+            },
+        }
+    }
+
+    fn wait_until(timeout: Duration, condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        condition()
+    }
+
+    #[test]
+    fn recording_stream_error_burst_should_reach_handler_once() {
+        let handled = Arc::new(AtomicUsize::new(0));
+        let mut callback = first_error_only({
+            let handled = Arc::clone(&handled);
+            move |_: cpal::StreamError| {
+                handled.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        });
+
+        for _ in 0..10_000 {
+            callback(pollerr());
+        }
+
+        assert_eq!(handled.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn keepalive_error_burst_should_reopen_the_stream_once() {
+        let (messages_tx, messages_rx) = mpsc::channel();
+        let opens = Arc::new(AtomicUsize::new(0));
+        let worker = thread::spawn({
+            let opens = Arc::clone(&opens);
+            move || {
+                run_keepalive_loop(&messages_rx, (), |_| {
+                    opens.fetch_add(1, AtomicOrdering::SeqCst);
+                    Ok(())
+                });
+            }
+        });
+
+        let mut callback = keepalive_error_callback(messages_tx.clone(), 0);
+        for _ in 0..10_000 {
+            callback(pollerr());
+        }
+
+        assert!(wait_until(Duration::from_secs(3), || opens
+            .load(AtomicOrdering::SeqCst)
+            == 1));
+        thread::sleep(KEEPALIVE_REOPEN_BACKOFF_INITIAL * 3);
+        assert_eq!(opens.load(AtomicOrdering::SeqCst), 1);
+
+        messages_tx
+            .send(KeepaliveMessage::Shutdown)
+            .expect("keepalive worker should be running");
+        worker.join().expect("keepalive worker should exit");
+    }
+
+    #[test]
+    fn keepalive_failing_right_after_open_should_back_off() {
+        let (messages_tx, messages_rx) = mpsc::channel();
+        let opens = Arc::new(AtomicUsize::new(0));
+        let worker = thread::spawn({
+            let opens = Arc::clone(&opens);
+            let messages_tx = messages_tx.clone();
+            move || {
+                run_keepalive_loop(&messages_rx, (), |generation| {
+                    opens.fetch_add(1, AtomicOrdering::SeqCst);
+                    keepalive_error_callback(messages_tx.clone(), generation)(pollerr());
+                    Ok(())
+                });
+            }
+        });
+
+        keepalive_error_callback(messages_tx.clone(), 0)(pollerr());
+        thread::sleep(Duration::from_millis(3_500));
+
+        assert!(opens.load(AtomicOrdering::SeqCst) <= 3);
+        messages_tx
+            .send(KeepaliveMessage::Shutdown)
+            .expect("keepalive worker should be running");
+        worker.join().expect("keepalive worker should exit");
+    }
+
+    #[test]
+    fn keepalive_should_shut_down_while_waiting_to_reopen() {
+        let (messages_tx, messages_rx) = mpsc::channel();
+        let exited = Arc::new(AtomicBool::new(false));
+        thread::spawn({
+            let exited = Arc::clone(&exited);
+            move || {
+                run_keepalive_loop(&messages_rx, (), |_| Err("no input device".to_string()));
+                exited.store(true, AtomicOrdering::Release);
+            }
+        });
+
+        keepalive_error_callback(messages_tx.clone(), 0)(pollerr());
+        thread::sleep(Duration::from_millis(100));
+        messages_tx
+            .send(KeepaliveMessage::Shutdown)
+            .expect("keepalive worker should be running");
+
+        assert!(wait_until(Duration::from_millis(500), || exited
+            .load(AtomicOrdering::Acquire)));
     }
 
     #[tokio::test]

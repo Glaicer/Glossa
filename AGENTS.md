@@ -180,7 +180,7 @@ The heart of the application. Defines **port traits** and the **pure reducer**.
 | `wav/writer.rs` | `hound::WavWriter` wrapper |
 | `wav/reader.rs` | WAV reading utilities |
 | `trim/energy_gate.rs` | Silence detection via absolute amplitude threshold |
-| `cue/rodio_player.rs` | `RodioCuePlayer` implements `CuePlayer`; plays WAV files via rodio |
+| `cue/rodio_player.rs` | `RodioCuePlayer` implements `CuePlayer`; owns its cpal output stream, mixes WAV cues through rodio's mixer/`Sink` |
 
 Capture and silence trimming always use WAV, regardless of `audio.format`. The pipeline encodes only after trimming and duration checks. Non-WAV encoding and encoder tests require system FFmpeg with `libmp3lame`, `aac`, `flac`, and `libvorbis` encoders.
 
@@ -285,7 +285,7 @@ The daemon runs in a loop in `cmd/daemon.rs`. When the actor returns `ActorExit:
 | Async runtime | `tokio` 1.41 | multi-thread, all features |
 | Audio capture | `cpal` 0.15 | Default input device streaming |
 | WAV I/O | `hound` 3.5 | Read/write WAV files |
-| Audio playback | `rodio` 0.19 | Cue sounds only |
+| Audio playback | `rodio` 0.19 | Cue decoding/mixing only. Not `OutputStream`: its error callback `eprintln!`s every error, and cpal 0.15 ALSA calls it in a tight loop after POLLERR, which flooded the journal. Any cpal error callback must report once per stream and let its owner drop the stream. |
 | STT HTTP | `reqwest` 0.12 | rustls-tls, multipart uploads |
 | Portal shortcuts | `ashpd` 0.8 | DBus GlobalShortcuts interface |
 | Tray icon | `tray-icon` 0.17 | GTK/AppIndicator on Linux. `default-features = false` keeps libxdo out: its soname differs between distros (Fedora 45 `.so.4`, Ubuntu `.so.3`), so one release binary cannot link it. It only backs predefined Copy/Cut/Paste/SelectAll menu items, which Glossa does not use. |
