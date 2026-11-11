@@ -5,6 +5,12 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] - 2026-11-11
+
+### Fixed
+
+- **Glossa's lines in the journal were cluttered with color codes such as `[2m` and `[0m`.** Glossa now writes plain text when its output is not a terminal, as under systemd. Colors still appear when it runs in a terminal, and `NO_COLOR` is still respected.
+
 ## [1.8.3] - 2026-11-11
 
 ### Fixed
@@ -250,6 +256,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.8.4]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.4
 [1.8.3]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.3
 [1.8.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.2
 [1.8.1]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.1
