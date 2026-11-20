@@ -9,11 +9,12 @@ use crate::{
 };
 
 pub fn build_client(config: &AppConfig, api_key: Arc<dyn ApiKeyProvider>) -> Arc<dyn SttClient> {
+    let terms = config.dictionary.active_terms();
     match config.provider.kind {
-        ProviderKind::Groq => build_groq_client(&config.provider, api_key),
-        ProviderKind::OpenAi => build_openai_client(&config.provider, api_key),
-        ProviderKind::OpenRouter => build_openrouter_client(&config.provider, api_key),
-        ProviderKind::OpenAiCompatible => build_compatible_client(&config.provider, api_key),
+        ProviderKind::Groq => build_groq_client(&config.provider, terms, api_key),
+        ProviderKind::OpenAi => build_openai_client(&config.provider, terms, api_key),
+        ProviderKind::OpenRouter => build_openrouter_client(&config.provider, terms, api_key),
+        ProviderKind::OpenAiCompatible => build_compatible_client(&config.provider, terms, api_key),
     }
 }
 

@@ -26,6 +26,8 @@ pub(super) struct SettingsValues {
     pub(super) latency_mode: LatencyMode,
     pub(super) keepalive_after_stop_seconds: u64,
     pub(super) ui_theme: UiTheme,
+    pub(super) dictionary_enabled: bool,
+    pub(super) dictionary_terms: Vec<String>,
 }
 
 impl SettingsValues {
@@ -48,6 +50,8 @@ impl SettingsValues {
             latency_mode: config.audio.latency_mode,
             keepalive_after_stop_seconds: config.audio.keepalive_after_stop_seconds,
             ui_theme: config.ui.theme,
+            dictionary_enabled: config.dictionary.enabled,
+            dictionary_terms: config.dictionary.terms.clone(),
         }
     }
 }
@@ -155,6 +159,8 @@ fn is_supported_missing_key(update: &SettingUpdate) -> bool {
             | ("LLM", "base_url")
             | ("LLM", "model")
             | ("LLM", "api_key")
+            | ("dictionary", "enabled")
+            | ("dictionary", "terms")
     )
 }
 
@@ -164,6 +170,7 @@ fn insert_missing_supported_sections(
     updated: &mut String,
 ) {
     insert_missing_section("LLM", updates, seen, updated);
+    insert_missing_section("dictionary", updates, seen, updated);
 }
 
 fn insert_missing_section(
@@ -363,7 +370,30 @@ fn build_updates(settings: &SettingsValues) -> Vec<SettingUpdate> {
         SettingUpdate::new("paste", "mode", quoted(paste_mode_id(settings.paste_mode))),
         SettingUpdate::new("paste", "append_space", settings.append_space.to_string()),
         SettingUpdate::new("ui", "theme", quoted(ui_theme_id(settings.ui_theme))),
+        SettingUpdate::new(
+            "dictionary",
+            "enabled",
+            settings.dictionary_enabled.to_string(),
+        ),
+        SettingUpdate::new(
+            "dictionary",
+            "terms",
+            quoted_array(&settings.dictionary_terms),
+        ),
     ]
+}
+
+pub(super) fn dictionary_summary(enabled: bool, terms: usize) -> String {
+    match (enabled, terms) {
+        (false, _) => "Off".into(),
+        (true, 1) => "1 term".into(),
+        (true, count) => format!("{count} terms"),
+    }
+}
+
+fn quoted_array(values: &[String]) -> String {
+    let items: Vec<String> = values.iter().map(|value| quoted(value)).collect();
+    format!("[{}]", items.join(", "))
 }
 
 fn quoted(value: &str) -> String {
@@ -560,6 +590,11 @@ enabled = false
 base_url = ""
 model = ""
 api_key = ""
+
+[dictionary]
+# Terms the provider should spell correctly.
+enabled = false
+terms = [] # keep this comment
 "#
         .into()
     }
@@ -583,6 +618,8 @@ api_key = ""
             latency_mode: LatencyMode::Instant,
             keepalive_after_stop_seconds: 30,
             ui_theme: UiTheme::Light,
+            dictionary_enabled: true,
+            dictionary_terms: vec!["Glossa".into(), "Скрайб \"два\"".into()],
         }
     }
 
@@ -649,6 +686,11 @@ enabled = true
 base_url = "https://llm.example.com/v1"
 model = "custom-llm"
 api_key = "env:LLM_KEY"
+
+[dictionary]
+# Terms the provider should spell correctly.
+enabled = true
+terms = ["Glossa", "Скрайб \"два\""] # keep this comment
 "#;
 
         assert_eq!(updated, expected);
@@ -730,6 +772,11 @@ enabled = true
 base_url = "https://llm.example.com/v1"
 model = "custom-llm"
 api_key = "env:LLM_KEY"
+
+[dictionary]
+# Terms the provider should spell correctly.
+enabled = true
+terms = ["Glossa", "Скрайб \"два\""] # keep this comment
 "#;
 
         assert_eq!(updated, expected);
@@ -802,6 +849,11 @@ enabled = true
 base_url = "https://llm.example.com/v1"
 model = "custom-llm"
 api_key = "env:LLM_KEY"
+
+[dictionary]
+# Terms the provider should spell correctly.
+enabled = true
+terms = ["Glossa", "Скрайб \"два\""] # keep this comment
 "#;
 
         assert_eq!(updated, expected);
@@ -831,6 +883,57 @@ model = "custom-llm"
 api_key = "env:LLM_KEY"
 "#
         ));
+    }
+
+    #[test]
+    fn apply_settings_to_config_should_insert_missing_dictionary_section() {
+        let source = valid_config_source().replace(
+            r#"
+[dictionary]
+# Terms the provider should spell correctly.
+enabled = false
+terms = [] # keep this comment
+"#,
+            "",
+        );
+
+        let updated = apply_settings_to_config(&source, &updated_settings())
+            .expect("missing dictionary section should be inserted");
+
+        assert!(updated.ends_with(
+            r#"api_key = "env:LLM_KEY"
+
+[dictionary]
+enabled = true
+terms = ["Glossa", "Скрайб \"два\""]
+"#
+        ));
+    }
+
+    #[test]
+    fn dictionary_should_round_trip_through_config() {
+        let updated = apply_settings_to_config(&valid_config_source(), &updated_settings())
+            .expect("dictionary settings should save");
+        let config = glossa_core::AppConfig::from_toml_str(&updated).expect("parse config");
+        let settings = SettingsValues::from_config(&config);
+        assert!(settings.dictionary_enabled);
+        assert_eq!(settings.dictionary_terms, ["Glossa", "Скрайб \"два\""]);
+    }
+
+    #[test]
+    fn apply_settings_to_config_should_reject_invalid_dictionary_terms() {
+        let mut settings = updated_settings();
+        settings.dictionary_terms = vec!["a[b".into()];
+        let error = apply_settings_to_config(&valid_config_source(), &settings)
+            .expect_err("invalid term should fail");
+        assert!(error.to_string().contains("must not contain"));
+    }
+
+    #[test]
+    fn dictionary_summary_should_show_off_or_term_count() {
+        assert_eq!(super::dictionary_summary(false, 12), "Off");
+        assert_eq!(super::dictionary_summary(true, 1), "1 term");
+        assert_eq!(super::dictionary_summary(true, 12), "12 terms");
     }
 
     #[test]

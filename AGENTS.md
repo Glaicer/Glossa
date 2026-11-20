@@ -132,7 +132,7 @@ Pure data crate. **No async, no platform deps, no I/O.**
 
 | Module | Contents |
 |--------|----------|
-| `config/` | `AppConfig` with 7 sections: `InputConfig`, `ControlConfig`, `ProviderConfig`, `AudioConfig`, `PasteConfig`, `UiConfig`, `LoggingConfig`. Validated on load. |
+| `config/` | `AppConfig` with sections `InputConfig`, `ControlConfig`, `ProviderConfig`, `AudioConfig`, `PasteConfig`, `UiConfig`, `LoggingConfig`, plus optional `LlmConfig` (`[LLM]`) and `DictionaryConfig` (`[dictionary]`). Validated on load. |
 | `command.rs` | `AppCommand` enum (`StartRecording`, `StopRecording`, `ToggleRecording`, `Restart`, `Shutdown`) + `CommandOrigin` |
 | `state.rs` | `AppState` enum (`Idle`, `Recording`, `Processing`, `Pasting`, `ShuttingDown`) with payload structs |
 | `ids.rs` | `SessionId(Uuid)` — unique per recording cycle |
@@ -192,6 +192,7 @@ One shared `HttpSttClient` implementing `SttClient`, with thin strategy construc
 - `compatible.rs` — generic OpenAI-compatible with configurable `base_url`
 - `factory.rs` — `build_client(config) → Arc<dyn SttClient>`
 - `dto.rs` — request/response DTOs
+- `dictionary.rs` — picks how `[dictionary]` terms travel from provider kind + model alias: multipart `prompt` (cut to a character budget), OpenAI `keywords[]`, or OpenRouter `keyterms`. Only `keyterms` switches to OpenRouter's JSON body with base64 `input_audio`; an empty or disabled dictionary keeps the original multipart request.
 
 ### `glossa-platform-linux` — Linux/GNOME/Wayland Adapters
 

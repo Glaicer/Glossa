@@ -1,15 +1,18 @@
+use std::{cell::RefCell, rc::Rc};
+
 use gtk::{
-    glib::object::IsA, prelude::*, Box as GtkBox, CheckButton, ComboBoxText, Dialog, DialogFlags,
-    Entry, Frame, Grid, Label, Orientation, ResponseType, Widget, Window,
+    glib::object::IsA, prelude::*, Box as GtkBox, Button, CheckButton, ComboBoxText, Dialog,
+    DialogFlags, Entry, Frame, Grid, Label, Orientation, PolicyType, ResponseType, ScrolledWindow,
+    ShadowType, TextView, Widget, Window, WrapMode,
 };
 
 use glossa_app::AppError;
-use glossa_core::AudioFormat;
+use glossa_core::{parse_dictionary_terms, AudioFormat};
 
 use super::settings::{
-    input_backend_id, input_mode_id, latency_mode_id, parse_input_backend, parse_input_mode,
-    parse_latency_mode, parse_paste_mode, parse_provider_kind, parse_ui_theme, paste_mode_id,
-    provider_kind_id, ui_theme_id, SettingsValues,
+    dictionary_summary, input_backend_id, input_mode_id, latency_mode_id, parse_input_backend,
+    parse_input_mode, parse_latency_mode, parse_paste_mode, parse_provider_kind, parse_ui_theme,
+    paste_mode_id, provider_kind_id, ui_theme_id, SettingsValues,
 };
 
 const INPUT_BACKEND_TOOLTIP: &str =
@@ -26,6 +29,12 @@ const PROVIDER_MODEL_TOOLTIP: &str =
     "Sets the transcription model that the configured provider should use.";
 const PROVIDER_API_KEY_TOOLTIP: &str =
     "API keys entered here are stored in Secret Service. Values such as env:VAR are also supported.";
+const DICTIONARY_TOOLTIP: &str =
+    "Opens the dictionary of terms the provider should spell correctly. Changes apply when Settings is saved.";
+const DICTIONARY_ENABLED_TOOLTIP: &str =
+    "Sends the dictionary with each transcription. ElevenLabs Scribe charges extra for it.";
+const DICTIONARY_TERMS_TOOLTIP: &str =
+    "Comma-separated terms or short phrases: at most 99 terms, 50 characters and 5 words each, without < > { } [ ] \\.";
 const PASTE_MODE_TOOLTIP: &str = "Selects which keyboard shortcut dotool should emulate for paste.";
 const APPEND_SPACE_TOOLTIP: &str =
     "Appends one trailing space to the pasted transcription for continuous dictation.";
@@ -141,6 +150,30 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
         PROVIDER_API_KEY_TOOLTIP,
         &api_key,
     );
+    let dictionary = Rc::new(RefCell::new((
+        current.dictionary_enabled,
+        current.dictionary_terms.clone(),
+    )));
+    let dictionary_button = Button::with_label(&dictionary_summary(
+        current.dictionary_enabled,
+        current.dictionary_terms.len(),
+    ));
+    dictionary_button.set_hexpand(true);
+    attach_row(
+        &provider_grid,
+        4,
+        "Dictionary",
+        DICTIONARY_TOOLTIP,
+        &dictionary_button,
+    );
+    let held_dictionary = Rc::clone(&dictionary);
+    dictionary_button.connect_clicked(move |button| {
+        let (enabled, terms) = held_dictionary.borrow().clone();
+        if let Some((enabled, terms)) = edit_dictionary(enabled, &terms) {
+            button.set_label(&dictionary_summary(enabled, terms.len()));
+            *held_dictionary.borrow_mut() = (enabled, terms);
+        }
+    });
     container.pack_start(&wrap_section("Provider", &provider_grid), false, false, 0);
 
     let audio_grid = create_section_grid();
@@ -232,6 +265,7 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
     let result = loop {
         match dialog.run() {
             ResponseType::Accept => {
+                let (dictionary_enabled, dictionary_terms) = dictionary.borrow().clone();
                 break Some(SettingsValues {
                     input_backend: parse_input_backend(&selected_id(
                         &backend_combo,
@@ -268,6 +302,8 @@ pub(super) fn edit_settings(current: &SettingsValues) -> Result<Option<SettingsV
                     )?,
                     ui_theme: parse_ui_theme(&selected_id(&theme, "UI theme")?)
                         .ok_or_else(|| AppError::message("UI theme selection is invalid"))?,
+                    dictionary_enabled,
+                    dictionary_terms,
                 });
             }
             ResponseType::Help => {
@@ -338,6 +374,83 @@ fn edit_llm_settings(current: &SettingsValues) -> Option<SettingsValues> {
         Some(settings)
     } else {
         None
+    };
+
+    dialog.close();
+    result
+}
+
+fn edit_dictionary(enabled: bool, terms: &[String]) -> Option<(bool, Vec<String>)> {
+    let dialog = Dialog::with_buttons(
+        Some("Dictionary"),
+        None::<&Window>,
+        DialogFlags::MODAL,
+        &[
+            ("Cancel", ResponseType::Cancel),
+            ("Save", ResponseType::Accept),
+        ],
+    );
+    dialog.set_default_size(520, 320);
+    dialog.set_resizable(true);
+    dialog.set_keep_above(true);
+    dialog.set_default_response(ResponseType::Accept);
+    apply_response_button_spacing(&dialog);
+
+    let content = dialog.content_area();
+    let container = GtkBox::new(Orientation::Vertical, 12);
+    container.set_margin_top(12);
+    container.set_margin_bottom(12);
+    container.set_margin_start(12);
+    container.set_margin_end(12);
+
+    let grid = create_section_grid();
+    let enabled_check = CheckButton::new();
+    enabled_check.set_active(enabled);
+    attach_row(
+        &grid,
+        0,
+        "Enabled",
+        DICTIONARY_ENABLED_TOOLTIP,
+        &enabled_check,
+    );
+    let terms_view = TextView::new();
+    terms_view.set_wrap_mode(WrapMode::WordChar);
+    let terms_buffer = terms_view.buffer()?;
+    terms_buffer.set_text(&terms.join(", "));
+    let terms_scroll = ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
+    terms_scroll.set_policy(PolicyType::Never, PolicyType::Automatic);
+    terms_scroll.set_shadow_type(ShadowType::In);
+    terms_scroll.set_hexpand(true);
+    terms_scroll.set_vexpand(true);
+    terms_scroll.set_min_content_height(160);
+    terms_scroll.add(&terms_view);
+    attach_row(&grid, 1, "Terms", DICTIONARY_TERMS_TOOLTIP, &terms_scroll);
+    let error_label = Label::new(None);
+    error_label.set_xalign(0.0);
+    error_label.set_line_wrap(true);
+    error_label.set_no_show_all(true);
+    grid.attach(&error_label, 0, 2, 2, 1);
+
+    container.pack_start(&wrap_section("Dictionary", &grid), true, true, 0);
+    content.pack_start(&container, true, true, 0);
+    dialog.show_all();
+    dialog.present();
+
+    let result = loop {
+        if dialog.run() != ResponseType::Accept {
+            break None;
+        }
+        let text = terms_buffer
+            .text(&terms_buffer.start_iter(), &terms_buffer.end_iter(), false)
+            .map(|text| text.to_string())
+            .unwrap_or_default();
+        match parse_dictionary_terms(&text) {
+            Ok(terms) => break Some((enabled_check.is_active(), terms)),
+            Err(error) => {
+                error_label.set_text(&error.to_string());
+                error_label.show();
+            }
+        }
     };
 
     dialog.close();

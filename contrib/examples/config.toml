@@ -30,6 +30,16 @@ model = ""
 # References an LLM key stored in Secret Service. "env:VARIABLE_NAME" or "" for local providers are also supported.
 api_key = ""
 
+[dictionary]
+# Sends the terms below with each transcription so they come out spelled correctly; options: true, false.
+# Glossa picks the request field from the provider and model: "keyterms" for OpenRouter "*/scribe*" models,
+# "keywords" for OpenAI "gpt-transcribe", and "prompt" otherwise (the prompt is cut at whole terms to about 200 characters).
+# ElevenLabs Scribe charges +20% per request when keyterms are sent.
+enabled = false
+# Lists terms or short phrases in priority order; at most 99 terms, each at most 50 characters and 5 words, without < > { } [ ] \.
+# Keep the list on one line so Settings can update it.
+terms = []
+
 [audio]
 # Enables the recording start/stop cue sounds; options: true, false.
 enabled = true

@@ -6,6 +6,21 @@ pub struct TranscriptionResponse {
     pub text: String,
 }
 
+/// OpenRouter JSON transcription request, used when sending `keyterms`.
+#[derive(Debug, Serialize)]
+pub struct JsonTranscriptionRequest<'a> {
+    pub model: &'a str,
+    pub input_audio: InputAudio,
+    pub keyterms: &'a [String],
+}
+
+/// Base64 audio payload of a JSON transcription request.
+#[derive(Debug, Serialize)]
+pub struct InputAudio {
+    pub data: String,
+    pub format: &'static str,
+}
+
 /// Chat completion request for OpenAI-compatible APIs.
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionRequest {

@@ -12,7 +12,8 @@ use glossa_app::{
 };
 use glossa_core::{AudioFormat, CapturedAudio, ProviderConfig, ProviderKind};
 
-use crate::dto::TranscriptionResponse;
+use crate::dictionary::DictionaryRequest;
+use crate::dto::{InputAudio, JsonTranscriptionRequest, TranscriptionResponse};
 
 /// Shared OpenAI-style multipart transcription client.
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ pub struct HttpSttClient {
     provider_name: &'static str,
     endpoint: String,
     model: String,
+    dictionary: DictionaryRequest,
     api_key: Arc<dyn ApiKeyProvider>,
     client: reqwest::Client,
 }
@@ -30,15 +32,48 @@ impl HttpSttClient {
         provider_name: &'static str,
         endpoint: String,
         model: String,
+        dictionary: DictionaryRequest,
         api_key: Arc<dyn ApiKeyProvider>,
     ) -> Self {
         Self {
             provider_name,
             endpoint,
             model,
+            dictionary,
             api_key,
             client: reqwest::Client::new(),
         }
+    }
+}
+
+impl HttpSttClient {
+    fn multipart_form(
+        &self,
+        audio: &CapturedAudio,
+        bytes: Vec<u8>,
+        format: Option<AudioFormat>,
+    ) -> Result<Form, AppError> {
+        let filename = audio.path.file_name().unwrap_or("capture.wav").to_string();
+        let mime = format.map_or("application/octet-stream", AudioFormat::mime_type);
+        let file_part = Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(mime)
+            .map_err(|error| {
+                AppError::message(format!("failed to encode upload mime type: {error}"))
+            })?;
+        let mut form = Form::new()
+            .text("model", self.model.clone())
+            .part("file", file_part);
+        match &self.dictionary {
+            DictionaryRequest::Prompt { text, .. } => form = form.text("prompt", text.clone()),
+            DictionaryRequest::Keywords(keywords) => {
+                for keyword in keywords {
+                    form = form.text("keywords[]", keyword.clone());
+                }
+            }
+            DictionaryRequest::None | DictionaryRequest::Keyterms(_) => {}
+        }
+        Ok(form)
     }
 }
 
@@ -53,37 +88,43 @@ impl SttClient for HttpSttClient {
             provider = self.provider_name,
             path = %audio.path,
             duration_ms = audio.duration_ms,
+            dictionary_mode = self.dictionary.mode_name(),
+            dictionary_terms = self.dictionary.term_count(),
             "uploading captured audio for transcription"
         );
         let bytes = fs::read(audio.path.as_std_path())
             .await
             .map_err(|error| AppError::io("failed to read captured audio", error))?;
-        let filename = audio.path.file_name().unwrap_or("capture.wav").to_string();
-        let mime = audio
+        let format = audio
             .path
             .extension()
-            .and_then(|extension| AudioFormat::from_extension(&extension.to_ascii_lowercase()))
-            .map_or("application/octet-stream", AudioFormat::mime_type);
-        let file_part = Part::bytes(bytes)
-            .file_name(filename)
-            .mime_str(mime)
-            .map_err(|error| {
-                AppError::message(format!("failed to encode upload mime type: {error}"))
-            })?;
-        let form = Form::new()
-            .text("model", self.model.clone())
-            .part("file", file_part);
+            .and_then(|extension| AudioFormat::from_extension(&extension.to_ascii_lowercase()));
 
         let api_key = self.api_key.api_key().await?;
         let mut request = self.client.post(&self.endpoint);
         if !api_key.is_empty() {
             request = request.bearer_auth(&api_key);
         }
-
-        let response =
-            request.multipart(form).send().await.map_err(|error| {
-                AppError::message(format!("transcription request failed: {error}"))
+        let request = if let DictionaryRequest::Keyterms(keyterms) = &self.dictionary {
+            let format = format.ok_or_else(|| {
+                AppError::message(format!("unsupported audio file extension: {}", audio.path))
             })?;
+            request.json(&JsonTranscriptionRequest {
+                model: &self.model,
+                input_audio: InputAudio {
+                    data: crate::base64::encode(&bytes),
+                    format: format.extension(),
+                },
+                keyterms,
+            })
+        } else {
+            request.multipart(self.multipart_form(audio, bytes, format)?)
+        };
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| AppError::message(format!("transcription request failed: {error}")))?;
 
         let status = response.status();
         if status != StatusCode::OK {
@@ -178,6 +219,7 @@ fn http_status_error_message(status: StatusCode) -> String {
 #[must_use]
 pub fn build_http_client(
     config: &ProviderConfig,
+    dictionary_terms: &[String],
     api_key: Arc<dyn ApiKeyProvider>,
     provider_name: &'static str,
 ) -> Arc<dyn SttClient> {
@@ -195,6 +237,7 @@ pub fn build_http_client(
         provider_name,
         endpoint,
         config.model.clone(),
+        DictionaryRequest::new(config.kind, &config.model, dictionary_terms),
         api_key,
     ))
 }

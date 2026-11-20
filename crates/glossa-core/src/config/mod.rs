@@ -1,4 +1,5 @@
 mod audio;
+mod dictionary;
 mod input;
 mod llm;
 mod logging;
@@ -12,6 +13,7 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub use self::audio::{AudioConfig, LatencyMode, WorkDir};
+pub use self::dictionary::{parse_dictionary_terms, DictionaryConfig};
 pub use self::input::{InputBackend, InputConfig, InputMode};
 pub use self::llm::LlmConfig;
 pub use self::logging::{LogLevel, LoggingConfig};
@@ -32,6 +34,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default, rename = "LLM")]
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub dictionary: DictionaryConfig,
 }
 
 impl AppConfig {
@@ -51,6 +55,7 @@ impl AppConfig {
         self.ui.validate()?;
         self.logging.validate()?;
         self.llm.validate()?;
+        self.dictionary.validate()?;
         Ok(())
     }
 
@@ -225,6 +230,7 @@ impl Default for AppConfig {
             ui: UiConfig::default(),
             logging: LoggingConfig::default(),
             llm: LlmConfig::default(),
+            dictionary: DictionaryConfig::default(),
         }
     }
 }
