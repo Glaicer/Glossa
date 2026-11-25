@@ -5,6 +5,22 @@ All notable changes to Glossa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-11-25
+
+Glossa can now send your own list of terms with each transcription, so names, product names, and jargon come out spelled correctly.
+
+### Added
+
+- A new optional `[dictionary]` section in `config.toml` with `enabled` and `terms`. Glossa trims each term, drops duplicates that differ only in case, and keeps your order.
+- Glossa sends the terms in the form the selected model understands: `keyterms` for OpenRouter `scribe` models, `keywords` for OpenAI `gpt-transcribe`, and a text prompt for everything else. The prompt is cut at whole terms to 200 characters, and Glossa logs one warning when it cuts.
+- Settings has a `Dictionary` row under Provider. It opens a window with `Enabled` and a comma-separated `Terms` field. The window checks the list, and your changes apply when you save Settings.
+
+### Notes
+
+- A dictionary holds up to 99 terms, each up to 50 characters and 5 words, without `< > { } [ ] \`. These are ElevenLabs' keyterm limits, and Glossa applies them to every provider.
+- ElevenLabs Scribe charges 20% more per request when keyterms are sent.
+- With no `[dictionary]` section, or with it disabled or empty, requests are exactly the same as before.
+
 ## [1.8.4] - 2026-11-11
 
 ### Fixed
@@ -256,6 +272,7 @@ Glossa lets you hold or toggle a global shortcut, record microphone input, trans
 - Tray integration with status icons and shortcut rebinding.
 - `glossa doctor`, `glossa status`, and `glossa ctl` commands.
 
+[1.9.0]: https://github.com/Glaicer/Glossa/releases/tag/v1.9.0
 [1.8.4]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.4
 [1.8.3]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.3
 [1.8.2]: https://github.com/Glaicer/Glossa/releases/tag/v1.8.2
